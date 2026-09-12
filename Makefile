@@ -3,11 +3,15 @@
 # NOTE: Can be overridden externally.
 #
 
-#Build target
+#Build target (default F072 for original tinySA, use TARGET=F303 for Ultra)
 ifeq ($(TARGET),)
   TARGET = F072
-else
-  TARGET = F303
+endif
+# Validate target explicitly - any other value is a user error, not silently F303
+ifneq ($(TARGET),F072)
+ifneq ($(TARGET),F303)
+$(error Invalid TARGET=$(TARGET). Use TARGET=F072 or TARGET=F303)
+endif
 endif
 
 # Compiler options here.
