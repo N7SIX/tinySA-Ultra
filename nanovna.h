@@ -582,7 +582,7 @@ extern void tlv320aic3204_select(int channel);
  */
 
 // Offset of plot area
-#define OFFSETX 30
+#define OFFSETX 35
 #define OFFSETY 0
 
 #define NGRIDY 10
