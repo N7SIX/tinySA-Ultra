@@ -488,7 +488,9 @@ to_dBm(const float v)
 float
 dBm_to_Watt(const float v)
 {
-  return   logf(v*1000.0)*(10.0/logf(10.0));
+  // dBm -> Watt (inverse of to_dBm U_WATT branch and of value() U_WATT).
+  // Was: logf(v*1000.0)*(10.0/logf(10.0)) which is the Watt->dBm direction.
+  return expf(v*(logf(10.0)/10.0)) / 1000.0;
 }
 
 static float fast_expf(float x)

@@ -8,6 +8,8 @@
 // Scope (honest): validates pure logic only — interpolation/search/clamp,
 // unit-conversion formulas, checksum properties, RSSI scaling round-trips.
 // It does NOT validate RF calibration constants, DSP, or hardware behavior.
+// dBm<->Watt coverage includes the formerly dead dBm_to_Watt() helper so a
+// name/copy-paste (dBm->Watt vs Watt->dBm) regression fails loudly.
 //
 // Build+run:  ./host_test/run_tests.sh
 #include <stdio.h>
@@ -38,6 +40,7 @@ static int checks = 0;
 struct { int unit; } setting;      /* value()/to_dBm() read setting.unit only */
 #include "value_extract.inc"
 #include "to_dBm_extract.inc"
+#include "dbm_to_watt_extract.inc"  /* formerly dead helper: dBm -> Watt */
 
 /* ---- real calculate_correction() + interpolation core from sa_core.c --- */
 struct {
@@ -110,14 +113,14 @@ static void test_rssi_scaling(void)
 
 static void test_correction_interp(void)
 {
-  /* synthetic table, c=0: freq[i]=1MHz*(i+1), value[i]=2*i dB.
-   * scaled = dB << SCALE_FACTOR(5), i.e. pureRSSI LSB = 1/32 dB. */
+  /* Synthetic table, c=0: freq[i]=1MHz*(i+1), value[i]=2*i dB for i<CORRECTION_POINTS.
+   * scaled = dB << SCALE_FACTOR(5), i.e. pureRSSI LSB = 1/32 dB.
+   * CORRECTION_POINTS comes from defs.inc, so this covers whichever target
+   * the extractor selected (TINYSA4 = 20). */
   for (int i = 0; i < CORRECTION_POINTS; i++) {
     config.correction_frequency[0][i] = (freq_t)1000000ULL * (i + 1);
     config.correction_value[0][i]     = 2.0f * i;
   }
-  /* intentional duplicate frequency at [3] to exercise the divider==0 guard */
-  config.correction_frequency[0][3] = 4000000ULL;
   calculate_correction();
 
   const float LSB = 1.0f / 32.0f;
@@ -126,21 +129,28 @@ static void test_correction_interp(void)
   CHECK_NEAR(interp_db(500000, 0), 0.0f, LSB);
 
   /* exact table hit */
-  CHECK_NEAR(interp_db(1000000, 0), 2.0f, LSB);
+  CHECK_NEAR(interp_db(1000000, 0), 0.0f, LSB);
 
-  /* midpoint between 1MHz(2dB) and 2MHz(4dB) */
-  CHECK_NEAR(interp_db(1500000, 0), 3.0f, LSB);
+  /* midpoint between 1MHz(0dB) and 2MHz(2dB) */
+  CHECK_NEAR(interp_db(1500000, 0), 1.0f, LSB);
 
   /* generic interior point (3.9MHz, between 3M=4dB and 4M=6dB) */
   CHECK_NEAR(interp_db(3900000, 0), 5.8f, 2 * LSB);
 
-  /* divider==0 guard (duplicate frequency, f inside the segment):
-   * must return the left value, not divide by zero */
-  CHECK_NEAR(interp_db(4500000, 0), 4.0f, LSB);
+  /* interior point of a later segment (4.5MHz, between 4M=6dB and 5M=8dB) */
+  CHECK_NEAR(interp_db(4500000, 0), 7.0f, LSB);
+  /* NOTE: the firmware's scaled_f_divider==0 guard is kept as belt-and-braces,
+   * but it is unreachable with a strictly monotonic table: the search loop
+   * guarantees freq[i-1] < f <= freq[i], so freq[i]==freq[i-1] can never
+   * coincide with a live interpolation segment. We therefore do NOT fabricate
+   * an unsorted/duplicate table (firmware can never produce one) to "cover"
+   * it — that would test an input the device can never see. */
 
-  /* above the last entry and exact last entry: clamped to value[19]=38dB */
-  CHECK_NEAR(interp_db(1000000000ULL, 0), 38.0f, LSB);
-  CHECK_NEAR(interp_db(20000000, 0), 38.0f, LSB);
+  /* above the last entry and exact last entry: clamped to value[19]=38dB
+   * (this bound is parametric: adapts if CORRECTION_POINTS changes) */
+  const float last_db = 2.0f * (CORRECTION_POINTS - 1);
+  CHECK_NEAR(interp_db(1000000000ULL, 0), last_db, LSB);
+  CHECK_NEAR(interp_db(20000000, 0), last_db, LSB);
 
   /* monotonicity inside a rising segment (3.0M..4.0M, 4dB..6dB) */
   float prev = interp_db(3000000, 0);
@@ -167,6 +177,16 @@ static void test_units(void)
   /* reference points for a 50-ohm system */
   setting.unit = U_WATT; CHECK_NEAR(value(0.0f), 0.001f, 1e-9);     /* 0dBm = 1mW */
   setting.unit = U_WATT; CHECK_NEAR(to_dBm(0.001f), 0.0f, 1e-4);
+  /* the formerly dead helper must agree with value()U_WATT/to_dBm U_WATT:
+   * 0dBm -> 1mW, -30dBm -> 1uW, +30dBm -> 1W, and invertibility with value() */
+  CHECK_NEAR(dBm_to_Watt(0.0f), 0.001f, 1e-9);
+  CHECK_NEAR(dBm_to_Watt(-30.0f), 0.000001f, 1e-12);
+  CHECK_NEAR(dBm_to_Watt(30.0f), 1.0f, 1e-6);
+  setting.unit = U_WATT;
+  for (float x = -90.0f; x <= 10.0f; x += 10.0f) {
+    CHECK_NEAR(dBm_to_Watt(x), value(x), 2e-6f);   /* identical formula, wider sweep */
+    CHECK_NEAR(to_dBm(dBm_to_Watt(x)), x, 0.02f);  /* inverse of to_dBm path */
+  }
   setting.unit = U_DBUV; CHECK_NEAR(value(0.0f), 106.9897f, 0.01f); /* 0dBm = 107dBuV */
   setting.unit = U_DBMV; CHECK_NEAR(value(0.0f), 46.9897f, 0.01f);  /* 0dBm = 47dBmV */
   setting.unit = U_DBV;  CHECK_NEAR(value(0.0f), -13.0103f, 0.01f);
