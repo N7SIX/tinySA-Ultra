@@ -288,6 +288,9 @@ ifeq ($(TARGET),F303)
 UDEFS+= -DVNA_USE_LSE
 # Use R as usb pullup
 UDEFS+= -DUSB_DP_R_VDD
+# Note: __DRAW_TIME__ instrumentation is compile-time opt-in and NOT enabled
+# by default. Developers: add "-D__DRAW_TIME__" to UDEFS here to get the
+# shell "drawtime on|off" LCD render-time readout. Release keeps zero hook.
 #-DCH_DBG_STATISTICS 
 else
 UDEFS = -DSHELL_CMD_TEST_ENABLED=FALSE -DSHELL_CMD_MEM_ENABLED=FALSE -DARM_MATH_CM0 -DVERSION=\"$(VERSION)\" -DTINYSA_F072 -DTINYSA3

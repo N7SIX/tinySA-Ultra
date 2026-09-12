@@ -2633,6 +2633,9 @@ static const VNAShellCommand commands[] =
 #ifdef __ADF4351__
     { "x", cmd_x,    CMD_WAIT_MUTEX },
 #endif
+#ifdef __DRAW_TIME__
+    { "drawtime", cmd_drawtime, 0 },
+#endif
     {NULL          , NULL            , 0}
 };
 

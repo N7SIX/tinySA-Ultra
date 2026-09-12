@@ -51,6 +51,15 @@ static int16_t grid_offset;
 static int16_t grid_width;
 static freq_t grid_span;
 
+#ifdef __DRAW_TIME__
+// Opt-in draw timing accumulators (plot.c only, 10B .bss).
+// Off by default: draw_time_enabled=false, zero behavior change.
+uint32_t draw_time_us_last = 0;
+uint32_t draw_time_us_max = 0;
+uint16_t draw_cells_last = 0;
+bool draw_time_enabled = false;
+#endif
+
 uint16_t area_width  = AREA_WIDTH_NORMAL;
 uint16_t area_height; // initialized in main()  = AREA_HEIGHT_NORMAL;
 
@@ -1348,6 +1357,10 @@ static void
 draw_all_cells(bool flush_markmap)
 {
   int m, n;
+#ifdef __DRAW_TIME__
+  systime_t t0 = chVTGetSystemTimeX();
+  uint16_t cells_drawn = 0;
+#endif
   //  START_PROFILE
   // Row-batched redraw: adjacent dirty cells in the same row are rendered
   // into consecutive DMA buffers and pushed with one address-window setup
@@ -1364,8 +1377,12 @@ draw_all_cells(bool flush_markmap)
       int m0 = m;
       while (m < row_cells && (update_map & ((map_t)1 << m))) m++;
       // Render + push run [m0, m) as one wide strip
-      for (int mc = m0; mc < m; mc++)
+      for (int mc = m0; mc < m; mc++) {
         draw_cell(mc, n);
+#ifdef __DRAW_TIME__
+        cells_drawn++;
+#endif
+      }
     }
   }
 #if 0
@@ -1385,6 +1402,20 @@ draw_all_cells(bool flush_markmap)
   }
   // Flush LCD buffer, wait completion (need call after end use ili9341_bulk_continue mode)
   ili9341_bulk_finish();
+#ifdef __DRAW_TIME__
+  {
+    uint32_t dt_us = sa_ST2US(chVTGetSystemTimeX() - t0);
+    extern uint32_t draw_time_us_last, draw_time_us_max;
+    extern uint16_t draw_cells_last;
+    extern bool draw_time_enabled;
+    draw_cells_last = cells_drawn;
+    if (draw_time_enabled) {
+      draw_time_us_last = dt_us;
+      if (dt_us > draw_time_us_max)
+        draw_time_us_max = dt_us;
+    }
+  }
+#endif
 //  STOP_PROFILE
 }
 

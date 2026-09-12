@@ -1022,6 +1022,15 @@ void markers_reset(void);
 #define REDRAW_TRIGGER    (1<<6)
 #define REDRAW_INBETWEEN  (1<<7)
 extern  uint16_t redraw_request;
+// Opt-in LCD draw timing (off by default: zero overhead in release).
+// When enabled via "drawtime on", draw_all_cells accumulates per-frame
+// cell count + time so the LCD batching gain is measurable on hardware.
+#ifdef __DRAW_TIME__
+extern uint32_t draw_time_us_last;
+extern uint32_t draw_time_us_max;
+extern uint16_t draw_cells_last;
+extern bool draw_time_enabled;
+#endif
 
 /*
  * ili9341.c

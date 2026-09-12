@@ -1427,6 +1427,39 @@ VNA_SHELL_FUNCTION(cmd_k)
   shell_printf("%.2f\r\n", Si446x_get_temp());
 }
 
+#ifdef __DRAW_TIME__
+// drawtime [on|off] — compile-time opt-in LCD draw instrumentation.
+// Reports last/max render wall time for draw_all_cells + cells drawn.
+VNA_SHELL_FUNCTION(cmd_drawtime)
+{
+  static const char cmd_on_off[] = "on|off";
+  if (argc == 1) {
+    int m = get_str_index(argv[0], cmd_on_off);
+    if (m < 0) goto usage;
+    draw_time_enabled = (m == 0);
+    shell_printf("drawtime %s\r\n", draw_time_enabled ? "on" : "off");
+    draw_time_us_max = 0;
+    return;
+  }
+  if (argc == 0) {
+    if (draw_time_enabled) {
+      shell_printf("drawtime on: last=%luus max=%luus cells=%u\r\n",
+                   (unsigned long)draw_time_us_last,
+                   (unsigned long)draw_time_us_max,
+                   (unsigned)draw_cells_last);
+    } else {
+      shell_printf("drawtime off (last=%luus max=%luus cells=%u)\r\n",
+                   (unsigned long)draw_time_us_last,
+                   (unsigned long)draw_time_us_max,
+                   (unsigned)draw_cells_last);
+    }
+    return;
+  }
+usage:
+  usage_printf("drawtime %s\r\n", cmd_on_off);
+}
+#endif // __DRAW_TIME__
+
 
 #endif
 
