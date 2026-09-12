@@ -123,7 +123,10 @@ endif
 
 # Define project name here
 ifeq ($(TARGET),F303)
-PROJECT = tinySA4_N7SIX_v7.6.$(shell git rev-list --count HEAD).$(shell git rev-parse --short HEAD)
+# Short version for the LCD display: v7.6.<commit-count>.<short-hash>, e.g. v7.6.21.3d8d718
+SHORT_VERSION = v7.6.$(shell git rev-list --count HEAD).$(shell git rev-parse --short HEAD)
+# Output filename base: tinySA4_N7SIX_<SHORT_VERSION>, e.g. tinySA4_N7SIX_v7.6.21.3d8d718
+PROJECT = tinySA4_N7SIX_$(SHORT_VERSION)
 else
 PROJECT = tinySA
 endif
@@ -289,7 +292,7 @@ CPPWARN = -Wall -Wextra -Wundef
 
 # List all user C define here, like -D_DEBUG=1
 ifeq ($(TARGET),F303)
- UDEFS = -DARM_MATH_CM4 -DVERSION=\"$(VERSION)\" -DTINYSA_F303 -D__FPU_USED -DST7796S -DTINYSA4
+ UDEFS = -DARM_MATH_CM4 -DVERSION=\"$(VERSION)\" -DSHORT_VERSION=\"$(SHORT_VERSION)\" -DTINYSA_F303 -D__FPU_USED -DST7796S -DTINYSA4
 #Enable if install external 32.768kHz clock quartz on PC14 and PC15 pins on STM32 CPU
 UDEFS+= -DVNA_USE_LSE
 # Use R as usb pullup

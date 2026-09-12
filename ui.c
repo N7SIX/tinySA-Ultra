@@ -6567,11 +6567,17 @@ redraw_cal_status:
 
   // Version
   y += YSTEP + YSTEP/2 ;
-#ifdef TINYSA4 // 'tinySA4_v1.2-[0-9]*-gxxxxxxx'
-  strncpy(buf,&TINYSA_VERSION[9], BLEN+1); // '1.2-...'
-#else // 'tinySA_v1.2-[0-9]*-gxxxxxxx'
+#ifdef TINYSA4 // SHORT_VERSION 'v7.6.<count>.<hash>' -> compact '7.6.21'
+  {
+    const char *hash = strrchr(SHORT_VERSION, '.'); // last dot starts the short commit hash
+    size_t n = (hash != NULL ? (size_t)(hash - SHORT_VERSION) : sizeof(SHORT_VERSION) - 1) - 1; // without leading 'v' and '.<hash>'
+    if (n > BLEN)
+      n = BLEN;
+    strncpy(buf, &SHORT_VERSION[1], n);
+    buf[n] = 0;                            // -> '7.6.21'
+  }
+#else // TINYSA3 'tinySA_v1.2-[0-9]*-gxxxxxxx'
   strncpy(buf,&TINYSA_VERSION[8], BLEN+1); // '1.2-...'
-#endif
   if (buf[5]=='-' ) { // '1.2-n-g...'
     if (buf[4]=='0')  // '1.2-0-g...'
       buf[3] = 0;  // -> '1.2'
@@ -6588,6 +6594,7 @@ redraw_cal_status:
     buf[5] = buf[6];
   }
   buf[6] = 0;
+#endif
   ili9341_drawstring(buf, x, y);
 
 #ifdef TINYSA4

@@ -97,7 +97,11 @@ const char * const info_about[]={
   "2019-2024 Copyright @Erik Kaashoek",
   "2016-2020 Copyright @edy555",
   "SW licensed under GPL. See: https://github.com/N7SIX/tinySA",
+#ifdef TINYSA4
+  "Version: " SHORT_VERSION, // short form 'v7.6.21.3d8d718'; full string still available via shell 'version'
+#else
   "Version: " VERSION,
+#endif
   "Build Time: " __DATE__ " - " __TIME__,
   "Kernel: " CH_KERNEL_VERSION,
   "Compiler: " PORT_COMPILER_NAME,
