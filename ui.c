@@ -6252,10 +6252,18 @@ int invoke_quick_menu(int y)
 // Center the narrow status-footer readouts inside the left status column
 // (column width = OFFSETX px = 7 small-font glyphs, FONT_WIDTH = 5px).
 // Centered rows: 6-glyph flags, up to 7-glyph version/hash, HW version,
-// date/time (see RTC rows below). Each x comes from its own strlen() via
-// STATUS_COL_X().
-#define RTC_COL_X(len) ((OFFSETX - (len) * FONT_WIDTH) / 2)
-#define STATUS_COL_X(s) ((OFFSETX - (int)strlen(s) * FONT_WIDTH) / 2)
+// date/time (see RTC rows below). Each x comes from the string's real
+// rendered width, so the variable-width 5x7 glyphs (e.g. 3px '.', 4px
+// ' ' ':' '/') keep the text optically centered in the column.
+static int strwidth(const char *s)
+{
+  int w = 0;
+  while (*s)
+    w += FONT_GET_WIDTH(*s++);
+  return w;
+}
+#define RTC_COL_X(s) ((OFFSETX - strwidth(s)) / 2)
+#define STATUS_COL_X(s) ((OFFSETX - strwidth(s)) / 2)
 
 int add_quick_menu(int y, menuitem_t *menu)
 {
@@ -6621,20 +6629,25 @@ redraw_cal_status:
 #endif
 
 #ifdef __USE_RTC__
+  char rbuf[8];
   y += YSTEP + YSTEP/2 ;
   uint32_t dr = rtc_get_dr_bin(); // DR read second
-  lcd_printf(RTC_COL_X(5), y, "%02d/%02d", RTC_DR_MONTH(dr), RTC_DR_DAY(dr));
+  plot_printf(rbuf, sizeof(rbuf), "%02d/%02d", RTC_DR_MONTH(dr), RTC_DR_DAY(dr));
+  lcd_printf(RTC_COL_X(rbuf), y, "%s", rbuf);
   y += YSTEP;
-  lcd_printf(RTC_COL_X(4), y, "%04d", RTC_START_YEAR + RTC_DR_YEAR(dr));
+  plot_printf(rbuf, sizeof(rbuf), "%04d", RTC_START_YEAR + RTC_DR_YEAR(dr));
+  lcd_printf(RTC_COL_X(rbuf), y, "%s", rbuf);
   y += YSTEP + YSTEP/2; // visible gap separating the date group from the time group
   uint32_t tr = rtc_get_tr_bin(); // TR read first
   { // 12h clock: "HH:MM" + "AM"/"PM" on two centered rows
     int h24 = RTC_TR_HOUR(tr);
     int h12 = h24 % 12;
     if (h12 == 0) h12 = 12;
-    lcd_printf(RTC_COL_X(5), y, "%02d:%02d", h12, RTC_TR_MIN(tr));
+    plot_printf(rbuf, sizeof(rbuf), "%02d:%02d", h12, RTC_TR_MIN(tr));
+    lcd_printf(RTC_COL_X(rbuf), y, "%s", rbuf);
     y += YSTEP;
-    lcd_printf(RTC_COL_X(2), y, "%s", h24 < 12 ? "AM" : "PM");
+    plot_printf(rbuf, sizeof(rbuf), "%s", h24 < 12 ? "AM" : "PM");
+    lcd_printf(RTC_COL_X(rbuf), y, "%s", rbuf);
   }
   y = add_quick_menu(y, (menuitem_t *)menu_date_time);
 #endif
