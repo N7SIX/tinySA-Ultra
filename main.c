@@ -2834,10 +2834,11 @@ int parse_line(char *line, char* args[], int max_cnt) {
 const VNAShellCommand *VNAShell_parceLine(char *line){
   // Parse and execute line
   shell_nargs = parse_line(line, shell_args, ARRAY_COUNT(shell_args));
-  if (shell_nargs >= ARRAY_COUNT(shell_args)) {
-    // parse_line only stores max_cnt pointers but still counts extras, so
-    // shell_args[1..] would be out-of-bounds for sc_function(argc, &argv[1]).
-    // Reject instead of dispatching with a truncated argv.
+  if (shell_nargs > ARRAY_COUNT(shell_args)) {
+    // parse_line stores at most max_cnt pointers but keeps counting extras.
+    // Legal max is 1 cmd + VNA_SHELL_MAX_ARGUMENTS tokens == ARRAY_COUNT.
+    // Anything above dispatches with truncated argv, so reject and clear
+    // shell_nargs (prevents stale shell_args[0] leaking into "...?" echo).
     shell_printf("too many arguments, max " define_to_STR(VNA_SHELL_MAX_ARGUMENTS) "" VNA_SHELL_NEWLINE_STR);
     shell_nargs = 0;
     return NULL;
