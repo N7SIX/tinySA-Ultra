@@ -268,7 +268,13 @@ AOPT =
 TOPT = -mthumb -DTHUMB
 
 # Define C warning options here
-CWARN = -Wall -Wextra -Wundef -Wstrict-prototypes
+# -Wno-* entries silence vendored ChibiOS/CMSIS (19.x-era) warnings under GCC-13:
+#   -Wimplicit-fallthrough        hal_usb.c / hal_pwm_lld.c intentional fall-throughs
+#   -Wdeprecated                  CMSIS core_cmFunc.h "sp" clobber (banked MSP/PSP, safe)
+#   -Wmissing-field-initializers  usbcfg.c USBEndpointConfig ep_buffers defaults 0
+# Project sources compile warning-clean; all other -Wall/-Wextra classes stay on.
+CWARN = -Wall -Wextra -Wundef -Wstrict-prototypes \
+	-Wno-implicit-fallthrough -Wno-deprecated -Wno-missing-field-initializers
 
 # Define C++ warning options here
 CPPWARN = -Wall -Wextra -Wundef
@@ -319,13 +325,10 @@ include $(RULESPATH)/rules.mk
 $(OBJS): $(VERSION_FILE)
 
 
-ifeq ($(TARGET),F303)
-clean:
-	rm -f -rf build/tinySA4.* build/lst/*.* build/obj/*.*
-else
-clean:
-	rm -f -rf build/$(PROJECT).* build/lst/*.* build/obj/*.*
-endif
+# NOTE: no project 'clean' target defined here — the ChibiOS rules.mk clean
+# (included below) removes the whole $(BUILDDIR), which also covers
+# build/tinySA4.* artifacts. Defining a second clean here triggers a
+# make "overriding recipe" warning, so rely on rules.mk only.
 
 flash: build/$(PROJECT).bin
 	-@printf "reset dfu\r" >/dev/cu.usbmodem401 # mac
