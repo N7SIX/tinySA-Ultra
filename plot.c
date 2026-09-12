@@ -2026,8 +2026,10 @@ draw_frequencies(void)
     ili9341_set_background(LCD_BG_COLOR);
     ili9341_fill(FREQUENCIES_XPOS1, CHART_BOTTOM + 1, LCD_WIDTH - lvl_space - FREQUENCIES_XPOS1, LCD_HEIGHT - CHART_BOTTOM - 1);
     // Bottom border of the plot area (below the graph, above the text row)
-    ili9341_set_foreground(LCD_GRID_COLOR);
+    // NOTE: ili9341_fill paints with the background color, not the foreground
+    ili9341_set_background(LCD_GRID_COLOR);
     ili9341_fill(OFFSETX, CHART_BOTTOM, LCD_WIDTH - OFFSETX, 1);
+    ili9341_set_background(LCD_BG_COLOR);
     ili9341_set_foreground(LCD_FG_COLOR);
     int idx=0;
     do {
@@ -2077,8 +2079,10 @@ draw_frequencies(void)
   ili9341_set_background(LCD_BG_COLOR);
   ili9341_fill(FREQUENCIES_XPOS1, CHART_BOTTOM + 1, LCD_WIDTH - lvl_space - FREQUENCIES_XPOS1, LCD_HEIGHT - CHART_BOTTOM - 1);
   // Bottom border of the plot area (below the graph, above the text row)
-  ili9341_set_foreground(LCD_GRID_COLOR);
+  // NOTE: ili9341_fill paints with the background color, not the foreground
+  ili9341_set_background(LCD_GRID_COLOR);
   ili9341_fill(OFFSETX, CHART_BOTTOM, LCD_WIDTH - OFFSETX, 1);
+  ili9341_set_background(LCD_BG_COLOR);
   ili9341_set_foreground(LCD_FG_COLOR);
   if (uistat.lever_mode == LM_CENTER)
     buf1[0] = S_SARROW[0];
