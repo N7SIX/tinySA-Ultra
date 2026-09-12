@@ -6250,11 +6250,11 @@ int invoke_quick_menu(int y)
 #define YSTEP   8
 
 // Center the narrow RTC readouts inside the left status column (column
-// width = OFFSETX px = 7 small-font glyphs). "MM/DD/YY" (8ch) and "xx:xx AM"
-// (8ch) cannot fit on one row without crossing the plot border, so date and
-// time are each split over two centered rows ("MM/DD"+"YY", "HH:MM"+"AM").
-// The date keeps its old 2-row footprint; the time grows by one row, which
-// the item_space auto-spacing loop below absorbs.
+// width = OFFSETX px = 7 small-font glyphs). "MM/DD/YYYY" and "HH:MM AM"
+// cannot fit on one row without crossing the plot border, so date and time
+// are each split over two centered rows ("MM/DD"+"YYYY", "HH:MM"+"AM/PM")
+// with a half-row gap between the date and time groups. The extra rows are
+// absorbed by the item_space auto-spacing loop below.
 #define RTC_COL_X(len) ((OFFSETX - (len) * FONT_WIDTH) / 2)
 
 int add_quick_menu(int y, menuitem_t *menu)
@@ -6620,8 +6620,8 @@ redraw_cal_status:
   uint32_t dr = rtc_get_dr_bin(); // DR read second
   lcd_printf(RTC_COL_X(5), y, "%02d/%02d", RTC_DR_MONTH(dr), RTC_DR_DAY(dr));
   y += YSTEP;
-  lcd_printf(RTC_COL_X(2), y, "%02d", RTC_DR_YEAR(dr));
-  y += YSTEP;
+  lcd_printf(RTC_COL_X(4), y, "%04d", RTC_START_YEAR + RTC_DR_YEAR(dr));
+  y += YSTEP + YSTEP/2; // visible gap separating the date group from the time group
   uint32_t tr = rtc_get_tr_bin(); // TR read first
   { // 12h clock: "HH:MM" + "AM"/"PM" on two centered rows
     int h24 = RTC_TR_HOUR(tr);
