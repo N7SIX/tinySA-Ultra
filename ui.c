@@ -6285,7 +6285,7 @@ redraw_cal_status:
   // Clear only the status-text zone above the SD/battery widgets: the
   // battery/SD rows are owned (and repainted) by draw_battery_status(), so a
   // full-height clear here erases them for one frame = the periodic blink.
-  ili9341_fill(0, 0, OFFSETX, SD_ICON_ZONE_Y);
+  ili9341_fill(0, 0, OFFSETX, SD_BATT_ZONE_Y);
   max_quick_menu = 0;
   if (MODE_OUTPUT(setting.mode)) {     // No cal status during output
 #ifdef TINYSA4
