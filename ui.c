@@ -6599,6 +6599,13 @@ redraw_cal_status:
 
 #ifdef TINYSA4
   y += YSTEP;
+  {
+    const char *hash = strrchr(SHORT_VERSION, '.'); // short commit hash '346f755' (7 chars fits BLEN)
+    strncpy(buf, hash != NULL ? hash + 1 : "", BLEN);
+    buf[BLEN] = 0;
+    ili9341_drawstring(buf, x, y);
+  }
+  y += YSTEP;
   ili9341_drawstring(&(get_hw_version_text()[3]),x, y);
 #endif
 
