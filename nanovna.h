@@ -609,6 +609,12 @@ extern uint16_t graph_bottom;
 #define GRIDY             (CHART_BOTTOM / NGRIDY)
 #endif
 
+// SD/battery widgets live in the lowest 60px of the left status column.
+// draw_cal_status() clears only ABOVE this zone; draw_battery_status()
+// owns (and repaints) the zone, so a full-height clear here can never
+// blink the icons for one frame.
+#define SD_BATT_ZONE_Y    (LCD_HEIGHT-60)
+
 #define SD_CARD_START   (LCD_HEIGHT-40-20)
 #define BATTERY_START   (LCD_HEIGHT-40)
 

@@ -6249,13 +6249,13 @@ int invoke_quick_menu(int y)
 }
 #define YSTEP   8
 
-// Center the narrow RTC readouts inside the left status column (column
-// width = OFFSETX px = 7 small-font glyphs). "MM/DD/YYYY" and "HH:MM AM"
-// cannot fit on one row without crossing the plot border, so date and time
-// are each split over two centered rows ("MM/DD"+"YYYY", "HH:MM"+"AM/PM")
-// with a half-row gap between the date and time groups. The extra rows are
-// absorbed by the item_space auto-spacing loop below.
+// Center the narrow status-footer readouts inside the left status column
+// (column width = OFFSETX px = 7 small-font glyphs, FONT_WIDTH = 5px).
+// Centered rows: 6-glyph flags, up to 7-glyph version/hash, HW version,
+// date/time (see RTC rows below). Each x comes from its own strlen() via
+// STATUS_COL_X().
 #define RTC_COL_X(len) ((OFFSETX - (len) * FONT_WIDTH) / 2)
+#define STATUS_COL_X(s) ((OFFSETX - (int)strlen(s) * FONT_WIDTH) / 2)
 
 int add_quick_menu(int y, menuitem_t *menu)
 {
@@ -6282,7 +6282,10 @@ redraw_cal_status:
   x = 0;
   y = OFFSETY;
   ili9341_set_background(LCD_BG_COLOR);
-  ili9341_fill(0, 0, OFFSETX, LCD_HEIGHT);
+  // Clear only the status-text zone above the SD/battery widgets: the
+  // battery/SD rows are owned (and repainted) by draw_battery_status(), so a
+  // full-height clear here erases them for one frame = the periodic blink.
+  ili9341_fill(0, 0, OFFSETX, SD_ICON_ZONE_Y);
   max_quick_menu = 0;
   if (MODE_OUTPUT(setting.mode)) {     // No cal status during output
 #ifdef TINYSA4
@@ -6541,10 +6544,11 @@ redraw_cal_status:
   ili9341_drawstring_7x13(MODE_LOW(setting.mode) ? "LOW" : "HIGH", x, y);
   y += YSTEP + YSTEP/2 ;
 #endif
-  // Compact status string
-//  ili9341_set_background(LCD_FG_COLOR);
+  // Compact status string ("fgnbsH", BLEN-1 = 6 glyphs + NUL)
+  //  ili9341_set_background(LCD_FG_COLOR);
   ili9341_set_foreground(LCD_FG_COLOR);
-  strncpy(buf,"     ",BLEN-1);
+  strncpy(buf, "      ", BLEN-1);
+  buf[BLEN-1] = 0;
   if (setting.auto_IF)
     buf[0] = 'f';
   else
@@ -6569,7 +6573,8 @@ redraw_cal_status:
   if (LO_harmonic)
     buf[5] = 'H';
 #endif
-  ili9341_drawstring(buf, x, y);
+  buf[BLEN] = 0; // compact flags: trailing spaces stay spaces, centered below
+  ili9341_drawstring(buf, STATUS_COL_X(buf), y);
 
   // Version
   y += YSTEP + YSTEP/2 ;
@@ -6601,7 +6606,7 @@ redraw_cal_status:
   }
   buf[6] = 0;
 #endif
-  ili9341_drawstring(buf, x, y);
+  ili9341_drawstring(buf, STATUS_COL_X(buf), y);
 
 #ifdef TINYSA4
   y += YSTEP;
@@ -6609,10 +6614,10 @@ redraw_cal_status:
     const char *hash = strrchr(SHORT_VERSION, '.'); // short commit hash '346f755' (7 chars fits BLEN)
     strncpy(buf, hash != NULL ? hash + 1 : "", BLEN);
     buf[BLEN] = 0;
-    ili9341_drawstring(buf, x, y);
+    ili9341_drawstring(buf, STATUS_COL_X(buf), y);
   }
   y += YSTEP;
-  ili9341_drawstring(&(get_hw_version_text()[3]),x, y);
+  ili9341_drawstring(&(get_hw_version_text()[3]), STATUS_COL_X(&(get_hw_version_text()[3])), y);
 #endif
 
 #ifdef __USE_RTC__

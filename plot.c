@@ -2115,11 +2115,20 @@ draw_frequencies(void)
 // the SD/battery widgets between the left LCD edge (x=0) and the plot area
 // border (x=OFFSETX) without depending on draw_cal_status() state.
 #define BATTERY_COL_WIDTH       OFFSETX
+// Y of the SD/battery widget zone: draw_cal_status() clears only above this
+// so its status-column fill can never blink the SD/battery widgets.
+#define SD_ICON_ZONE_Y          SD_BATT_ZONE_Y
 
 static void draw_battery_status(void)
 {
   // Battery at 1Hz: ADC + icon + text redraw every sweep wastes SPI + CPU.
   // Cache last reading; skip when unchanged within hysteresis.
+  // NOTE: this owns the whole lowest-60px left-column widget zone
+  // (SD icon + battery + voltage). Clearing exactly this zone at entry
+  // leaves no stale pixels when the SD icon appears/disappears and keeps
+  // the repaints symmetric, so no partial-erase blink is possible.
+  ili9341_set_background(LCD_BG_COLOR);
+  ili9341_fill(0, SD_BATT_ZONE_Y, OFFSETX, LCD_HEIGHT - SD_BATT_ZONE_Y);
   static systime_t last_bat_time = 0;
   static int16_t last_vbat = 0;
   systime_t now = chVTGetSystemTimeX();
