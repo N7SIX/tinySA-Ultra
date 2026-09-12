@@ -98,7 +98,7 @@ const char * const info_about[]={
   "2016-2020 Copyright @edy555",
   "SW licensed under GPL. See: https://github.com/N7SIX/tinySA",
 #ifdef TINYSA4
-  "Version: " SHORT_VERSION, // short form 'v7.6.21.3d8d718'; full string still available via shell 'version'
+  "Version: " PROJECT_STR, // full filename form 'tinySA4_N7SIX_v7.6.21.3d8d718' (same as output file base)
 #else
   "Version: " VERSION,
 #endif
