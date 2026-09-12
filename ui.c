@@ -6631,8 +6631,8 @@ redraw_cal_status:
 
 //  ili9341_set_background(LCD_BG_COLOR);
   if (!setting.waterfall) {               // Do not draw bottom level if in waterfall mode
-    // Bottom level
-    y = area_height + OFFSETY;
+    // Bottom level: right aligned in the frequency text row, below the level scale
+    y = FREQUENCIES_YPOS;
     if (level_is_calibrated())
       if (setting.auto_reflevel)
         color = LCD_FG_COLOR;
@@ -6641,10 +6641,14 @@ redraw_cal_status:
     else
       color = LCD_BRIGHT_COLOR_RED;
     ili9341_set_foreground(color);
-    if (rounding)
-      lcd_printf(x, y, "%4d", (int)(yMax - setting.scale * NGRIDY));
-    else
-      lcd_printf(x, y, "%+4.3F", ((yMax - setting.scale * NGRIDY)/setting.unit_scale));
+    {
+      char lvl[16];
+      if (rounding)
+        plot_printf(lvl, sizeof(lvl), "%4d", (int)(yMax - setting.scale * NGRIDY));
+      else
+        plot_printf(lvl, sizeof(lvl), "%+4.3F", ((yMax - setting.scale * NGRIDY)/setting.unit_scale));
+      ili9341_drawstring(lvl, LCD_WIDTH - FONT_WIDTH*strlen(lvl), y);
+    }
     y = add_quick_menu(y,(menuitem_t *)menu_average);
   }
 }

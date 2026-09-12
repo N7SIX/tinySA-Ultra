@@ -287,7 +287,7 @@ rectangular_grid_x(int x)
 {
   x -= CELLOFFSETX;
   if (x < 0) return 0;
-  if (x == 0 || x == WIDTH)
+  if (x == 0 || x == PLOT_RIGHT_EDGE)
     return 1;
   if ((((x + grid_offset) * 10) % grid_width) < 10)
     return 1;
@@ -2013,6 +2013,9 @@ draw_frequencies(void)
 {
   char buf1[40];
   char buf2[32];
+  // Reserve the bottom right corner of the frequency text row for the
+  // bottom-of-scale level text (drawn by draw_cal_status)
+  const int lvl_space = setting.waterfall ? 0 : BOTTOM_LEVEL_SPACE;
   if (MODE_OUTPUT(setting.mode))     // No frequencies during output
     return;
   if (current_menu_is_form() && !in_selftest)
@@ -2021,7 +2024,11 @@ draw_frequencies(void)
   if (setting.multi_band && !setting.multi_trace) {
     ili9341_set_foreground(LCD_FG_COLOR);
     ili9341_set_background(LCD_BG_COLOR);
-    ili9341_fill(FREQUENCIES_XPOS1, CHART_BOTTOM + 1, LCD_WIDTH - FREQUENCIES_XPOS1, LCD_HEIGHT - CHART_BOTTOM - 1);
+    ili9341_fill(FREQUENCIES_XPOS1, CHART_BOTTOM + 1, LCD_WIDTH - lvl_space - FREQUENCIES_XPOS1, LCD_HEIGHT - CHART_BOTTOM - 1);
+    // Bottom border of the plot area (below the graph, above the text row)
+    ili9341_set_foreground(LCD_GRID_COLOR);
+    ili9341_fill(OFFSETX, CHART_BOTTOM, LCD_WIDTH - OFFSETX, 1);
+    ili9341_set_foreground(LCD_FG_COLOR);
     int idx=0;
     do {
       int next_idx = idx;
@@ -2068,14 +2075,18 @@ draw_frequencies(void)
   }
   ili9341_set_foreground(LCD_FG_COLOR);
   ili9341_set_background(LCD_BG_COLOR);
-  ili9341_fill(FREQUENCIES_XPOS1, CHART_BOTTOM + 1, LCD_WIDTH - FREQUENCIES_XPOS1, LCD_HEIGHT - CHART_BOTTOM - 1);
+  ili9341_fill(FREQUENCIES_XPOS1, CHART_BOTTOM + 1, LCD_WIDTH - lvl_space - FREQUENCIES_XPOS1, LCD_HEIGHT - CHART_BOTTOM - 1);
+  // Bottom border of the plot area (below the graph, above the text row)
+  ili9341_set_foreground(LCD_GRID_COLOR);
+  ili9341_fill(OFFSETX, CHART_BOTTOM, LCD_WIDTH - OFFSETX, 1);
+  ili9341_set_foreground(LCD_FG_COLOR);
   if (uistat.lever_mode == LM_CENTER)
     buf1[0] = S_SARROW[0];
   if (uistat.lever_mode == LM_SPAN)
     buf2[0] = S_SARROW[0];
 //  int p2 = FREQUENCIES_XPOS2;
 //  if (FREQ_IS_CW()) {
-    int p2 = LCD_WIDTH - FONT_WIDTH*strlen(buf2);
+    int p2 = LCD_WIDTH - lvl_space - FONT_WIDTH*strlen(buf2);
 //  }
   ili9341_drawstring(buf2, p2, FREQUENCIES_YPOS);
   ili9341_drawstring(buf1, FREQUENCIES_XPOS1, FREQUENCIES_YPOS);

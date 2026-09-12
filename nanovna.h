@@ -626,6 +626,14 @@ extern uint16_t graph_bottom;
 
 #define GRID_X_TEXT       (AREA_WIDTH_NORMAL - 7*5)
 
+// Last visible LCD column of the plot area (cell coordinate): the right edge
+// grid line must be drawn here, x == WIDTH would be one pixel off screen
+#define PLOT_RIGHT_EDGE   (LCD_WIDTH - 1 - OFFSETX - CELLOFFSETX)
+
+// Space reserved at the bottom right corner of the frequency text row for the
+// bottom-of-scale level text (max "%+4.3F" -> "-100.000" = 8 chars)
+#define BOTTOM_LEVEL_SPACE  (8 * FONT_WIDTH)
+
 // Marker start drag distance (can be bigger for various display resolution)
 #define MARKER_PICKUP_DISTANCE 20
 
