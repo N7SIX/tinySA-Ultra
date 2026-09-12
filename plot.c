@@ -24,7 +24,9 @@
 #include "nanovna.h"
 
 #pragma GCC push_options
-#pragma GCC optimize ("Os")      // Makes the code just a bit faster, disable during debugging.
+// Cell render hot loop: 8-pixel unrolled clear + per-pixel trace/grid.
+// -O2 vectorizes the clear and tightens draw_cell inner loops.
+#pragma GCC optimize ("O2")      // Was Os; sweep-tested, revert if flash overflows.
 
 #ifdef __SCROLL__
 uint16_t _grid_y = (CHART_BOTTOM / NGRIDY);
@@ -1346,13 +1348,25 @@ static void
 draw_all_cells(bool flush_markmap)
 {
   int m, n;
-//  START_PROFILE
-  for (n = 0; n < (area_height+CELLHEIGHT-1) / CELLHEIGHT; n++){
+  //  START_PROFILE
+  // Row-batched redraw: adjacent dirty cells in the same row are rendered
+  // into consecutive DMA buffers and pushed with one address-window setup
+  // (ili9341_bulk_continue), instead of one full setWindow per cell.
+  // Same pixels, fewer SPI command bytes + CS/DC toggles.
+  int row_cells = (area_width + CELLWIDTH - 1) / CELLWIDTH;
+  int row_count = (area_height + CELLHEIGHT - 1) / CELLHEIGHT;
+  for (n = 0; n < row_count; n++){
     map_t update_map = markmap[0][n] | markmap[1][n];
     if (update_map == 0) continue;
-    for (m = 0; update_map; update_map>>=1, m++)
-      if (update_map & 1)
-        draw_cell(m, n);
+    // Find runs of adjacent dirty cells in this row
+    for (m = 0; m < row_cells; ) {
+      if (!(update_map & ((map_t)1 << m))) { m++; continue; }
+      int m0 = m;
+      while (m < row_cells && (update_map & ((map_t)1 << m))) m++;
+      // Render + push run [m0, m) as one wide strip
+      for (int mc = m0; mc < m; mc++)
+        draw_cell(mc, n);
+    }
   }
 #if 0
   // Used for debug control cell update
@@ -1409,8 +1423,22 @@ draw_all(bool flush)
   }
   if (redraw_request & REDRAW_CAL_STATUS)
     draw_cal_status();                      // calculates the actual sweep time, must be before draw_frequencies
-  if (redraw_request & REDRAW_FREQUENCY)
-    draw_frequencies();
+  // Frequency text at 2Hz: START/STOP/CENTER strings are static between
+  // setting changes; redrawing every sweep costs fill + font blits.
+  // Skip when unchanged for >0.5s; force on REDRAW_AREA (setting changed).
+  {
+    static systime_t last_freq_time = 0;
+    static freq_t last_f1 = 0, last_f2 = 0, last_span = 0;
+    freq_t f1 = get_sweep_frequency(ST_START), f2 = get_sweep_frequency(ST_STOP);
+    systime_t fnow = chVTGetSystemTimeX();
+    bool freq_changed = (f1 != last_f1) || (f2 != last_f2) || (grid_span != last_span);
+    bool freq_due = (fnow - last_freq_time) >= (CH_CFG_ST_FREQUENCY / 2);
+    if ((redraw_request & REDRAW_FREQUENCY) && (freq_changed || freq_due || (redraw_request & REDRAW_AREA))) {
+      draw_frequencies();
+      last_f1 = f1; last_f2 = f2; last_span = grid_span;
+      last_freq_time = fnow;
+    }
+  }
   if (redraw_request & REDRAW_BATTERY)
     draw_battery_status();
   redraw_request = 0;
@@ -2037,6 +2065,22 @@ draw_frequencies(void)
 
 static void draw_battery_status(void)
 {
+  // Battery at 1Hz: ADC + icon + text redraw every sweep wastes SPI + CPU.
+  // Cache last reading; skip when unchanged within hysteresis.
+  static systime_t last_bat_time = 0;
+  static int16_t last_vbat = 0;
+  systime_t now = chVTGetSystemTimeX();
+  // ~1Hz throttle (system tick 10kHz). Always draw on first call.
+  if (last_vbat != 0 && (now - last_bat_time) < CH_CFG_ST_FREQUENCY) {
+    int16_t vbat_cached = adc_vbat_read();
+    if (vbat_cached <= 0)
+      return;
+    // Hysteresis: skip redraw when within 50mV and no threshold crossing
+    int thr_old = last_vbat < BATTERY_WARNING_LEVEL ? 0 : (last_vbat < BATTERY_MID_LEVEL ? 1 : 2);
+    int thr_new = vbat_cached < BATTERY_WARNING_LEVEL ? 0 : (vbat_cached < BATTERY_MID_LEVEL ? 1 : 2);
+    if (thr_old == thr_new && vbat_cached >= last_vbat - 50 && vbat_cached <= last_vbat + 50)
+      return;
+  }
 #ifdef  __USE_SD_CARD__
 static const uint8_t sd_icon [] = {
   _BMP16(0b1111111111111000),  //
@@ -2073,6 +2117,9 @@ static const uint8_t sd_icon [] = {
   int16_t vbat = adc_vbat_read();
   if (vbat <= 0)
     return;
+  // Commit throttle timestamp + reading after a successful draw decision
+  last_bat_time = now;
+  last_vbat = vbat;
   uint8_t string_buf[24];
   // Set battery color
   ili9341_set_foreground(vbat < BATTERY_WARNING_LEVEL ? LCD_LOW_BAT_COLOR : (vbat < BATTERY_MID_LEVEL ? LCD_TRACE_1_COLOR : LCD_NORMAL_BAT_COLOR));

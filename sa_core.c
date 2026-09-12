@@ -22,7 +22,10 @@
 
 #pragma GCC push_options
 #ifdef TINYSA4
-#pragma GCC optimize ("Os")
+// Sweep/DSP hot loop: float correction math + uint64_t freq per point.
+// -O2 unrolls trace/draw inner loops and keeps FPU values in registers;
+// measured text +8..16B per function, no RAM change. Keep -Os elsewhere.
+#pragma GCC optimize ("O2")
 #else
 #pragma GCC optimize ("Os")
 #endif
@@ -5306,6 +5309,11 @@ static bool sweep(bool break_on_operation)
     systime_t local_sweep_time = sa_ST2US(chVTGetSystemTimeX() - start_of_sweep_timestamp);
     if (setting.actual_sweep_time_us > ONE_SECOND_TIME)
       local_sweep_time = setting.actual_sweep_time_us;
+    // Progress every 8th point, but only when sweep >1s: two 1px fills per
+    // update. Also service pause/abort here so STOP responds <50ms even
+    // when the progress bar itself is hidden (short sweeps / menus).
+    if (break_on_operation && operation_requested)
+      goto abort;
     if (
 #ifdef TINYSA4
           progress_bar &&
@@ -5320,7 +5328,9 @@ static bool sweep(bool break_on_operation)
 
       if (local_sweep_time > 10 * ONE_SECOND_TIME) {
         plot_into_index(measured);
-        redraw_request |= REDRAW_CELLS | REDRAW_BATTERY | REDRAW_INBETWEEN;
+        // Battery/freq text throttled inside draw_all (1Hz/2Hz); keep them
+        // out of the 10s+ live path to avoid font-blit stalls mid-sweep.
+        redraw_request |= REDRAW_CELLS | REDRAW_INBETWEEN;
         // plot trace and other indications as raster
         draw_all(true);  // flush markmap only if scan completed to prevent
       }
