@@ -736,9 +736,9 @@ extern const char *states[];
       RTC_DR_YEAR(dr),
       RTC_DR_MONTH(dr),
       RTC_DR_DAY(dr),
-      RTC_TR_HOUR(dr),
-      RTC_TR_MIN(dr),
-      RTC_TR_SEC(dr),
+      RTC_TR_HOUR(tr),
+      RTC_TR_MIN(tr),
+      RTC_TR_SEC(tr),
       (RCC->BDCR & STM32_RTCSEL_MASK) == STM32_RTCSEL_LSE ? 'E' : 'I');
 #endif
 #if 0
@@ -6249,6 +6249,14 @@ int invoke_quick_menu(int y)
 }
 #define YSTEP   8
 
+// Center the narrow RTC readouts inside the left status column (column
+// width = OFFSETX px = 7 small-font glyphs). "MM/DD/YY" (8ch) and "xx:xx AM"
+// (8ch) cannot fit on one row without crossing the plot border, so date and
+// time are each split over two centered rows ("MM/DD"+"YY", "HH:MM"+"AM").
+// The date keeps its old 2-row footprint; the time grows by one row, which
+// the item_space auto-spacing loop below absorbs.
+#define RTC_COL_X(len) ((OFFSETX - (len) * FONT_WIDTH) / 2)
+
 int add_quick_menu(int y, menuitem_t *menu)
 {
   y += YSTEP*item_space/2 + YSTEP;
@@ -6258,8 +6266,6 @@ int add_quick_menu(int y, menuitem_t *menu)
   }
   return y;
 }
-
-const char *month[] = { "Jan", "Feb", "Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec" };
 
 void draw_cal_status(void)
 {
@@ -6612,10 +6618,19 @@ redraw_cal_status:
 #ifdef __USE_RTC__
   y += YSTEP + YSTEP/2 ;
   uint32_t dr = rtc_get_dr_bin(); // DR read second
-  lcd_printf(x, y,  "20%02d/\n%s/%02d", RTC_DR_YEAR(dr), month[RTC_DR_MONTH(dr)-1], RTC_DR_DAY(dr));
-  y += YSTEP*2;
+  lcd_printf(RTC_COL_X(5), y, "%02d/%02d", RTC_DR_MONTH(dr), RTC_DR_DAY(dr));
+  y += YSTEP;
+  lcd_printf(RTC_COL_X(2), y, "%02d", RTC_DR_YEAR(dr));
+  y += YSTEP;
   uint32_t tr = rtc_get_tr_bin(); // TR read first
-  lcd_printf(x, y,  "%02d:%02d", RTC_TR_HOUR(dr), RTC_TR_MIN(dr));
+  { // 12h clock: "HH:MM" + "AM"/"PM" on two centered rows
+    int h24 = RTC_TR_HOUR(tr);
+    int h12 = h24 % 12;
+    if (h12 == 0) h12 = 12;
+    lcd_printf(RTC_COL_X(5), y, "%02d:%02d", h12, RTC_TR_MIN(tr));
+    y += YSTEP;
+    lcd_printf(RTC_COL_X(2), y, "%s", h24 < 12 ? "AM" : "PM");
+  }
   y = add_quick_menu(y, (menuitem_t *)menu_date_time);
 #endif
 

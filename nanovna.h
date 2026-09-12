@@ -1738,9 +1738,9 @@ int16_t adc_vbat_read(void);
 #define RTC_DR_MONTH(dr)        (((dr)>> 8)&0xFF)
 #define RTC_DR_DAY(dr)          (((dr)>> 0)&0xFF)
 
-#define RTC_TR_HOUR(dr)         (((tr)>>16)&0xFF)
-#define RTC_TR_MIN(dr)          (((tr)>> 8)&0xFF)
-#define RTC_TR_SEC(dr)          (((tr)>> 0)&0xFF)
+#define RTC_TR_HOUR(tr)         (((tr)>>16)&0xFF)
+#define RTC_TR_MIN(tr)          (((tr)>> 8)&0xFF)
+#define RTC_TR_SEC(tr)          (((tr)>> 0)&0xFF)
 
 // Init RTC
 void rtc_init(void);

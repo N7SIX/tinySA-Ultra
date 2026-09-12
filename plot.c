@@ -2111,6 +2111,11 @@ draw_frequencies(void)
 #define BATTERY_WARNING_LEVEL   3300
 #define BATTERY_MID_LEVEL       3900
 
+// Width used for the left status column so draw_battery_status() can center
+// the SD/battery widgets between the left LCD edge (x=0) and the plot area
+// border (x=OFFSETX) without depending on draw_cal_status() state.
+#define BATTERY_COL_WIDTH       OFFSETX
+
 static void draw_battery_status(void)
 {
   // Battery at 1Hz: ADC + icon + text redraw every sweep wastes SPI + CPU.
@@ -2150,12 +2155,12 @@ static const uint8_t sd_icon [] = {
   };
   if (SD_Inserted() && SDIS_IS_ENABLED) {
     ili9341_set_foreground(LCD_BRIGHT_COLOR_GREEN);
-    ili9341_blitBitmap(4, SD_CARD_START, 16, 16, sd_icon);
+    ili9341_blitBitmap((BATTERY_COL_WIDTH - 16) / 2, SD_CARD_START, 16, 16, sd_icon);
 //  ili9341_drawstring("-SD-", x, SD_CARD_START);
   }
   else{
     ili9341_set_background(LCD_BG_COLOR);
-    ili9341_fill(4, SD_CARD_START, 16, 16);
+    ili9341_fill((BATTERY_COL_WIDTH - 16) / 2, SD_CARD_START, 16, 16);
     SD_PowerOff();
 #ifdef __DISABLE_HOT_INSERT__
     sd_card_inserted_at_boot = false;
@@ -2190,10 +2195,11 @@ static const uint8_t sd_icon [] = {
   // Battery bottom
   string_buf[x++] = 0b10000001;
   string_buf[x++] = 0b11111111;
-  // Draw battery
-  ili9341_blitBitmap(7, BATTERY_START, 8, x, string_buf);
+  // Draw battery (8px wide bitmap) centered in the left status column
+  ili9341_blitBitmap((BATTERY_COL_WIDTH - 8) / 2, BATTERY_START, 8, x, string_buf);
   plot_printf((char*)string_buf, sizeof string_buf, "%.2fv", vbat/1000.0);
-  ili9341_drawstring((char*)string_buf, 1, BATTERY_START+x+3);
+  // Center the "x.xxv" voltage readout in the same column
+  ili9341_drawstring((char*)string_buf, (BATTERY_COL_WIDTH - (int)strlen((char*)string_buf) * FONT_WIDTH) / 2, BATTERY_START+x+3);
 }
 
 void
