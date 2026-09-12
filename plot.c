@@ -2119,17 +2119,27 @@ static void draw_battery_status(void)
 {
   // Battery at 1Hz: ADC + icon + text redraw every sweep wastes SPI + CPU.
   // Cache last reading; skip when unchanged within hysteresis.
-  // NOTE: this owns the whole lowest-60px left-column widget zone
-  // (SD icon + battery + voltage). Clearing exactly this zone at entry
-  // leaves no stale pixels when the SD icon appears/disappears and keeps
-  // the repaints symmetric, so no partial-erase blink is possible.
-  ili9341_set_background(LCD_BG_COLOR);
-  ili9341_fill(0, SD_BATT_ZONE_Y, OFFSETX, LCD_HEIGHT - SD_BATT_ZONE_Y);
+  // The three widgets — SD icon, battery bitmap, voltage text — are each
+  // self-opaque: every blit/text/fill covers its own whole box, so repainting
+  // an unchanged widget is a no-op visually and NO zone-wide clear is done.
+  // A blank intermediate frame was the cause of the periodic "blink".
   static systime_t last_bat_time = 0;
   static int16_t last_vbat = 0;
+  static bool last_sd_on = false;
+  static bool first_batt_draw = true;
   systime_t now = chVTGetSystemTimeX();
-  // ~1Hz throttle (system tick 10kHz). Always draw on first call.
-  if (last_vbat != 0 && (now - last_bat_time) < CH_CFG_ST_FREQUENCY) {
+
+  bool sd_on = false;
+#ifdef  __USE_SD_CARD__
+  sd_on = SD_Inserted() && SDIS_IS_ENABLED;
+#endif
+
+  // Draw once per second (throttle expiry), immediately on the first call,
+  // when the SD card presence flips, or when the battery move exceeds the
+  // 50mV hysteresis / crosses a color threshold. Any skip returns before a
+  // single pixel is touched.
+  if (!first_batt_draw && last_sd_on == sd_on
+      && (now - last_bat_time) < CH_CFG_ST_FREQUENCY) {
     int16_t vbat_cached = adc_vbat_read();
     if (vbat_cached <= 0)
       return;
@@ -2139,6 +2149,8 @@ static void draw_battery_status(void)
     if (thr_old == thr_new && vbat_cached >= last_vbat - 50 && vbat_cached <= last_vbat + 50)
       return;
   }
+  last_sd_on = sd_on;
+
 #ifdef  __USE_SD_CARD__
 static const uint8_t sd_icon [] = {
   _BMP16(0b1111111111111000),  //
@@ -2158,12 +2170,14 @@ static const uint8_t sd_icon [] = {
   _BMP16(0b0101010101011000),  //14
   _BMP16(0b0111111111111000)   //
   };
-  if (SD_Inserted() && SDIS_IS_ENABLED) {
+  if (sd_on) {
     ili9341_set_foreground(LCD_BRIGHT_COLOR_GREEN);
     ili9341_blitBitmap((BATTERY_COL_WIDTH - 16) / 2, SD_CARD_START, 16, 16, sd_icon);
 //  ili9341_drawstring("-SD-", x, SD_CARD_START);
   }
   else{
+    // Erase the icon's own box (covers a previously drawn icon) and keep the
+    // card powered down / hot-insert disabled.
     ili9341_set_background(LCD_BG_COLOR);
     ili9341_fill((BATTERY_COL_WIDTH - 16) / 2, SD_CARD_START, 16, 16);
     SD_PowerOff();
@@ -2178,6 +2192,7 @@ static const uint8_t sd_icon [] = {
   // Commit throttle timestamp + reading after a successful draw decision
   last_bat_time = now;
   last_vbat = vbat;
+  first_batt_draw = false;
   uint8_t string_buf[24];
   // Set battery color
   ili9341_set_foreground(vbat < BATTERY_WARNING_LEVEL ? LCD_LOW_BAT_COLOR : (vbat < BATTERY_MID_LEVEL ? LCD_TRACE_1_COLOR : LCD_NORMAL_BAT_COLOR));
