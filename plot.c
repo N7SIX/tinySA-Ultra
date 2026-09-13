@@ -1472,6 +1472,15 @@ draw_all(bool flush)
       last_freq_time = fnow;
     }
   }
+  // The SD/battery/voltage cluster lives INSIDE the chart area (CHART_BOTTOM
+  // extends below the widgets), so a full-area redraw (REDRAW_AREA ->
+  // force_set_markmap) repaints grid/background over the SD icon and battery.
+  // Force the cluster to be repainted on top after every full-area redraw.
+  // Without this, self-test's test_validate() -> REDRAW_AREA + draw_all(TRUE)
+  // after every step leaves the widgets covered for the whole test run,
+  // because that path never sets REDRAW_BATTERY itself.
+  if (redraw_request & REDRAW_AREA)
+    redraw_request |= REDRAW_BATTERY;
   if (redraw_request & REDRAW_BATTERY)
     draw_battery_status();
   redraw_request = 0;
