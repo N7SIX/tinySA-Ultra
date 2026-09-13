@@ -1,8 +1,8 @@
 # tinySA-Ultra — Release Notes
 
 **Version:** `v7.6.39.eebbd64` (firmware image: `tinySA4_N7SIX_v7.6.39.eebbd64`)
-**Release window:** September 12–13, 2026
-**Commits:** 26 · **Branch:** `main`
+**Release window:** September 12–13, 2026 (follow-up refactor: September 13, 2026)
+**Commits:** 26 + refactor · **Branch:** `main`
 **Default target:** `STM32F303` (Ultra) · `TARGET=F072` for original tinySA
 
 ---
@@ -14,6 +14,12 @@ SD/battery/voltage status cluster, **boosting LCD render and sweep
 performance**, and **hardening the engineering toolchain** (host-side metrology
 tests, reproducible builds, warning-clean compilation). A full status-column
 UI refresh and several serial-shell bug fixes round out the set.
+
+A follow-up **refactor pass** completes the release: the SD card driver is
+extracted into its own module (`sd_card.c`), CI now compile-tests **both**
+firmware targets on every push, and a documented refactoring roadmap
+(`REFACTORING.md`) sets the direction for future cleanup. The refactor is
+verified **code-size neutral** on both targets.
 
 ---
 
@@ -110,6 +116,38 @@ UI refresh and several serial-shell bug fixes round out the set.
   dependency tracking.
 - **Docker builds fixed.** `git safe.directory` is set inside the container,
   eliminating "dubious ownership" failures with a mounted workspace.
+- **CI builds both targets.** CircleCI previously compiled only the F072
+  target; it now runs `make TARGET=F072` **and** `make TARGET=F303`, so the
+  Ultra firmware gets compile-tested on every push and in release builds.
+
+---
+
+## 🧱 Refactoring (follow-up pass)
+
+- **SD card driver extracted from `ili9341.c`.** The 722-line SD/MMC block
+  (card init, block read/write, CSD/CID parsing, FatFs `disk_*` glue) moves to
+  a dedicated **`sd_card.c`**, with the shared SPI1-bus interface — bus speed
+  macros, CS pin control for both devices, and the `set_SPI_mode()`
+  arbiter prototype — declared in a new **`sd_card.h`**.
+  `ili9341.c` is now display-only. The two DMA transfer helpers it shares with
+  the SD driver were de-`static`'d (single definition, no duplication).
+- **`Makefile`:** `sd_card.c` added to the F303 (Ultra) source list; the F072
+  target keeps its original, SD-less `ili9341.c` unchanged.
+- **Code-size neutral, verified by clean builds:**
+
+  | Target | Build | text + data (before → after) |
+  |---|---|---|
+  | F072 | ✅ passes | 117,788 + 832 → 117,792 + 828 (identical total) |
+  | F303 | ✅ passes | 198,820 + 4,136 → 198,824 + 4,132 (identical total) |
+
+- **`REFACTORING.md` added.** Documents the measured state of the codebase
+  (file sizes, `#ifdef` density, global-variable coupling, dead `#if 0`
+  blocks) and a risk-ordered roadmap for future cleanup:
+  1. CI/test coverage of the F303 build (done in this release),
+  2. module boundary moves like the SD extraction (done),
+  3. splitting oversized functions (e.g. 412-line `draw_cal_status()`),
+  4. dead-code pruning,
+  5. longer-term: per-target driver modules behind the 400+ `#ifdef`s.
 
 ---
 
@@ -120,8 +158,10 @@ UI refresh and several serial-shell bug fixes round out the set.
 | Display / UI | `plot.c`, `ui.c`, `nanovna.h` |
 | Shell / serial | `main.c` |
 | Performance | `plot.c`, `sa_core.c` |
-| Build system | `Makefile`, `compile-with-docker.sh` |
+| SD driver extraction | `sd_card.c` *(new)*, `sd_card.h` *(new)*, `ili9341.c` |
+| Build system | `Makefile`, `compile-with-docker.sh`, `.circleci/config.yml` |
 | Host tests | `host_test/run_tests.sh`, `host_test/test_metrology.c` |
+| Docs | `README.md`, `REFACTORING.md` *(new)*, `docs/RELEASE_NOTES.md` |
 | Cleanup | `.dep/*` (removed) |
 
 ---
@@ -133,7 +173,12 @@ $ ./host_test/run_tests.sh
 482 checks, 0 failures - ALL TESTS PASSED
 ```
 
-Build target `F303`: `make TARGET=F303`
+Both firmware targets build cleanly after the refactor:
+
+```
+$ make TARGET=F072   # original tinySA   — ✅ EXIT=0
+$ make TARGET=F303   # tinySA Ultra      — ✅ EXIT=0
+```
 
 ---
 

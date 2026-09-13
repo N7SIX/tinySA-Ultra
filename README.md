@@ -64,6 +64,14 @@ For tinySA Ultra use this command
 
     $ make TARGET="F303"
 
+## Firmware structure notes
+
+* The SD card driver (FatFs glue, SD SPI protocol, card init) lives in
+  `sd_card.c` / `sd_card.h` (tinySA Ultra / `TARGET=F303` builds only).
+  The SPI1 bus is shared between the LCD (ili9341.c) and the SD card;
+  the bus-arbitration primitives (`set_SPI_mode()`, CS pin control) are
+  declared in `sd_card.h` and implemented in `ili9341.c`.
+
 ### Build firmware using docker
 
 Using [this docker image](https://hub.docker.com/r/edy555/arm-embedded) and without installing arm toolchain, you can build the firmware.

@@ -11,8 +11,13 @@ jobs:
             git submodule init
             git submodule update --remote
       - run:
-          name: "Build Firmware"
-          command: make
+          name: "Build Firmware (F072 - original tinySA)"
+          command: make TARGET=F072 -j4
+      - run:
+          name: "Build Firmware (F303 - Ultra)"
+          command: |
+            make clean
+            make TARGET=F303 -j4
       - run:
           name: "Remove obj/lst files"
           command: rm -r build/obj build/lst
