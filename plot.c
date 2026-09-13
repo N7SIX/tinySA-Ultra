@@ -2126,16 +2126,17 @@ draw_frequencies(void)
 #define BATTERY_COL_WIDTH       OFFSETX
 static void draw_battery_status(void)
 {
-  // Battery at 1Hz: ADC + icon + text redraw every sweep wastes SPI + CPU.
-  // Cache last reading; skip when unchanged within hysteresis.
-  // The three widgets — SD icon, battery bitmap, voltage text — are each
-  // self-opaque: every blit/text/fill covers its own whole box, so repainting
-  // an unchanged widget is a no-op visually and NO zone-wide clear is done.
-  // A blank intermediate frame was the cause of the periodic "blink".
+  // The SD/battery/voltage widgets are opaque only inside their own boxes
+  // (ili9341_blitBitmap paints every pixel of the box). The chart area
+  // (CHART_BOTTOM) extends BELOW the widgets, so full-area chart repaints
+  // (e.g. after every self-test step) leave grid lines / old pixels in the
+  // gaps between and around the widgets. Therefore this function ALWAYS
+  // clears the whole section (x 0..OFFSETX, y SD_BATT_ZONE_Y..LCD_HEIGHT) to
+  // background first, then paints the widgets on top — the section is always
+  // a clean panel, never "only where the icons are displayed".
   static systime_t last_bat_time = 0;
   static int16_t last_vbat = 0;
   static bool last_sd_on = false;
-  static bool first_batt_draw = true;
   systime_t now = chVTGetSystemTimeX();
 
   bool sd_on = false;
@@ -2143,22 +2144,22 @@ static void draw_battery_status(void)
   sd_on = SD_Inserted() && SDIS_IS_ENABLED;
 #endif
 
-  // Draw once per second (throttle expiry), immediately on the first call,
-  // when the SD card presence flips, or when the battery move exceeds the
-  // 50mV hysteresis / crosses a color threshold. Any skip returns before a
-  // single pixel is touched.
-  if (!first_batt_draw && last_sd_on == sd_on
-      && (now - last_bat_time) < CH_CFG_ST_FREQUENCY) {
-    int16_t vbat_cached = adc_vbat_read();
-    if (vbat_cached <= 0)
-      return;
-    // Hysteresis: skip redraw when within 50mV and no threshold crossing
-    int thr_old = last_vbat < BATTERY_WARNING_LEVEL ? 0 : (last_vbat < BATTERY_MID_LEVEL ? 1 : 2);
-    int thr_new = vbat_cached < BATTERY_WARNING_LEVEL ? 0 : (vbat_cached < BATTERY_MID_LEVEL ? 1 : 2);
-    if (thr_old == thr_new && vbat_cached >= last_vbat - 50 && vbat_cached <= last_vbat + 50)
-      return;
+  // Refresh the battery reading at most once per second (ADC read + value);
+  // between refreshes reuse the last good value. The section redraw below
+  // still runs on every call, so a chart repaint can never leave the section
+  // dirty.
+  if (sd_on != last_sd_on || (now - last_bat_time) >= CH_CFG_ST_FREQUENCY) {
+    int16_t v = adc_vbat_read();
+    if (v > 0)
+      last_vbat = v;
+    last_bat_time = now;
   }
   last_sd_on = sd_on;
+  const int16_t vbat = last_vbat;
+
+  // Clear the entire battery section before drawing any widget.
+  ili9341_set_background(LCD_BG_COLOR);
+  ili9341_fill(0, SD_BATT_ZONE_Y, OFFSETX, LCD_HEIGHT - SD_BATT_ZONE_Y);
 
 #ifdef  __USE_SD_CARD__
 static const uint8_t sd_icon [] = {
@@ -2185,23 +2186,18 @@ static const uint8_t sd_icon [] = {
 //  ili9341_drawstring("-SD-", x, SD_CARD_START);
   }
   else{
-    // Erase the icon's own box (covers a previously drawn icon) and keep the
-    // card powered down / hot-insert disabled.
-    ili9341_set_background(LCD_BG_COLOR);
-    ili9341_fill((BATTERY_COL_WIDTH - 16) / 2, SD_CARD_START, 16, 16);
+    // Card not in use: keep it powered down / hot-insert disabled. The icon
+    // itself was already erased by the section clear above.
     SD_PowerOff();
 #ifdef __DISABLE_HOT_INSERT__
     sd_card_inserted_at_boot = false;
 #endif
   }
 #endif
-  int16_t vbat = adc_vbat_read();
+
   if (vbat <= 0)
-    return;
-  // Commit throttle timestamp + reading after a successful draw decision
-  last_bat_time = now;
-  last_vbat = vbat;
-  first_batt_draw = false;
+    return;                     // No valid reading yet (section + SD already drawn)
+
   uint8_t string_buf[24];
   // Set battery color
   ili9341_set_foreground(vbat < BATTERY_WARNING_LEVEL ? LCD_LOW_BAT_COLOR : (vbat < BATTERY_MID_LEVEL ? LCD_TRACE_1_COLOR : LCD_NORMAL_BAT_COLOR));
