@@ -6653,11 +6653,17 @@ redraw_cal_status:
 #endif
 
 
-  if (y >= BATTERY_START && item_space > 0) {
+  // Keep the whole status text column strictly ABOVE the SD/battery cluster.
+  // The reserved zone starts at the top of the SD icon (SD_CARD_START); leave
+  // a full text row margin so no glyph can ever be stamped over the SD icon,
+  // battery icon or voltage readout (they sit at the very bottom of the column).
+  // Referencing SD_CARD_START (not BATTERY_START) is what prevents the date/time
+  // and other status rows from overlapping the widgets during self-test/calibration.
+  if (y >= SD_CARD_START - FONT_GET_HEIGHT && item_space > 0) {
     item_space--;                       // Reduce item spacing
     goto redraw_cal_status;
   }
-  if ((y + (max_quick_menu+1) * YSTEP/2) < BATTERY_START && item_space < MAX_ITEM_SPACE) {
+  if ((y + (max_quick_menu+1) * YSTEP/2) < SD_CARD_START - FONT_GET_HEIGHT && item_space < MAX_ITEM_SPACE) {
     item_space++;                       // Increase item spacing
     goto redraw_cal_status;
   }

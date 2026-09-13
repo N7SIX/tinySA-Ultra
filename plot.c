@@ -2218,8 +2218,10 @@ static const uint8_t sd_icon [] = {
   // Draw battery (8px wide bitmap) centered in the left status column
   ili9341_blitBitmap((BATTERY_COL_WIDTH - 8) / 2, BATTERY_START, 8, x, string_buf);
   plot_printf((char*)string_buf, sizeof string_buf, "%.2fv", vbat/1000.0);
-  // Center the "x.xxv" voltage readout in the same column
-  ili9341_drawstring((char*)string_buf, (BATTERY_COL_WIDTH - (int)strlen((char*)string_buf) * FONT_WIDTH) / 2, BATTERY_START+x+3);
+  // Center the "x.xxv" voltage readout in the same column, aligned with the
+  // very last text row on screen (the frequency row) so the battery readout
+  // lines up with the bottom row of the display.
+  ili9341_drawstring((char*)string_buf, (BATTERY_COL_WIDTH - (int)strlen((char*)string_buf) * FONT_WIDTH) / 2, FREQUENCIES_YPOS);
 }
 
 void

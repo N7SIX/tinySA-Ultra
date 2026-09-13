@@ -609,14 +609,20 @@ extern uint16_t graph_bottom;
 #define GRIDY             (CHART_BOTTOM / NGRIDY)
 #endif
 
-// SD/battery widgets live in the lowest 60px of the left status column.
+// SD/battery widgets live in the lowest 45px of the left status column.
 // draw_cal_status() clears only ABOVE this zone; draw_battery_status()
 // owns (and repaints) the zone, so a full-height clear here can never
 // blink the icons for one frame.
-#define SD_BATT_ZONE_Y    (LCD_HEIGHT-60)
+//
+// Bottom-aligned cluster: SD icon, battery icon, then the voltage text on
+// the very last text row (FREQUENCIES_YPOS = LCD_HEIGHT-8) so the battery
+// readout lines up with the frequency row. The SD/battery icons sit directly
+// above it, so the whole cluster is tucked into the bottom corner and can
+// never collide with the status text above.
+#define SD_BATT_ZONE_Y    (LCD_HEIGHT-45)
 
-#define SD_CARD_START   (LCD_HEIGHT-40-20)
-#define BATTERY_START   (LCD_HEIGHT-40)
+#define SD_CARD_START   (LCD_HEIGHT-45)     // top of the 16px SD card icon
+#define BATTERY_START   (LCD_HEIGHT-27)     // top of the 18px battery icon
 
 #define WIDTH  (LCD_WIDTH - OFFSETX)
 #define HEIGHT (GRIDY*NGRIDY)
