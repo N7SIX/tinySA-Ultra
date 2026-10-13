@@ -6743,31 +6743,21 @@ redraw_cal_status:
 
   // Version
   y += YSTEP + YSTEP/2 ;
-#ifdef TINYSA4 // 'tinySA4_N7SIX_v7.6.x.xxxxxx'
+#ifdef TINYSA4 // 'tinySA4_N7SIX_v7.6.xxxxxx'
   {
-    const char *version_start = &TINYSA_VERSION[13]; // Skip "tinySA4_N7SIX_"
-    // Parse "v7.6.2238.c979386" to create "7.6.2.c9" format
-    char *dot1 = strchr(version_start, '.'); // After "v7"
-    if (dot1) {
-      char *dot2 = strchr(dot1 + 1, '.'); // After "v7.6"
-      if (dot2) {
-        char *dot3 = strchr(dot2 + 1, '.'); // After "v7.6.2238"
-        if (dot3) {
-          // Format: "7.6.X.Y" where X is first digit of commit count, Y is first char of hash
-          buf[0] = '7'; buf[1] = '.'; buf[2] = '6'; buf[3] = '.';
-          buf[4] = *(dot2 + 1); // First digit after "v7.6."
-          buf[5] = '.';
-          buf[6] = *(dot3 + 1); // First char after "v7.6.2239."
-          buf[7] = 0;
-        } else {
-          strncpy(buf, "7.6.?.?", BLEN + 1);
-        }
-      } else {
-        strncpy(buf, "7.6.?.?", BLEN + 1);
-      }
-    } else {
-      strncpy(buf, "7.6.?.?", BLEN + 1);
+    // Compact to "7.6.xxx": release + first 3 chars of the git hash
+    const char *dot1 = strchr(&TINYSA_VERSION[14], '.');   // after "v7"
+    const char *dot2 = dot1 ? strchr(dot1 + 1, '.') : 0;   // before the git hash
+    int i = 0;
+    if (dot2) {
+      buf[0] = '7'; buf[1] = '.'; buf[2] = '6'; buf[3] = '.';
+      for (i = 0; i < 3 && dot2[1 + i] != 0; i++)
+        buf[4 + i] = dot2[1 + i];
     }
+    if (!dot2 || i < 3)
+      strncpy(buf, "7.6.?", BLEN + 1);
+    else
+      buf[7] = 0;
   }
 #else // 'tinySA_v1.2-[0-9]*-gxxxxxxx'
   strncpy(buf,&TINYSA_VERSION[8], BLEN+1); // '1.2-...'

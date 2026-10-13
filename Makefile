@@ -106,7 +106,7 @@ endif
 
 # Define project name here
 ifeq ($(TARGET),F303)
-PROJECT = tinySA4_N7SIX_v7.6.$(shell git rev-list --count HEAD).$(shell git rev-parse --short HEAD)
+PROJECT = tinySA4_N7SIX_v7.6.$(shell git rev-parse --short HEAD)
 else
 PROJECT = tinySA
 endif

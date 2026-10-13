@@ -21,8 +21,9 @@ applied to this fork. **All six patches are now ported and the firmware builds**
 - The project is now a git repository (initial commit `7c129a6`) with ChibiOS
   registered as a submodule (`.gitmodules` mirrors upstream: `edy555/ChibiOS`,
   `branch = I2SFULLDUPLEX`, pinned at `0cfe7f528`). The Makefile derives
-  `PROJECT = tinySA4_N7SIX_v7.6.<count>.<sha>` from git, so artifacts and the
-  embedded firmware version are e.g. `tinySA4_N7SIX_v7.6.1.7c129a6`.
+  `PROJECT = tinySA4_N7SIX_v7.6.<sha>` from git (release number `v7.6` is
+  maintained by hand in the Makefile, the short hash identifies the build),
+  e.g. `tinySA4_N7SIX_v7.6.60638a4`; the status screen shows `7.6.<hash3>`.
   `-DVERSION` is baked in at compile time — after new commits run a `clean`
   rebuild to refresh the version string everywhere.
 - The F072/TINYSA3 target does not link: the fork's features need ~33 KB of
