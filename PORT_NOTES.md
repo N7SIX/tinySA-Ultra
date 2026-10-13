@@ -18,8 +18,13 @@ applied to this fork. **All six patches are now ported and the firmware builds**
 - Build with **Git Bash + mingw32-make** (the Makefile needs a POSIX shell):
   `mingw32-make TARGET=F303 -j8` → `build/tinySA4_N7SIX_v7.6.*` (bin/hex/elf).
   `arm-none-eabi-gcc` 14.3 and WinLibs `mingw32-make` are on PATH.
-- The project is **not a git checkout**, so the Makefile's `git rev-list` version
-  suffix comes out empty (`v7.6..`); functional, cosmetic only.
+- The project is now a git repository (initial commit `7c129a6`) with ChibiOS
+  registered as a submodule (`.gitmodules` mirrors upstream: `edy555/ChibiOS`,
+  `branch = I2SFULLDUPLEX`, pinned at `0cfe7f528`). The Makefile derives
+  `PROJECT = tinySA4_N7SIX_v7.6.<count>.<sha>` from git, so artifacts and the
+  embedded firmware version are e.g. `tinySA4_N7SIX_v7.6.1.7c129a6`.
+  `-DVERSION` is baked in at compile time — after new commits run a `clean`
+  rebuild to refresh the version string everywhere.
 - The F072/TINYSA3 target does not link (RAM overflows 16 KB by >16 KB) —
   **pre-existing**, this N7SIX fork is F303-only in practice. All MSC/fw code is
   `TINYSA4`-guarded and adds nothing to F072 builds.
@@ -28,7 +33,7 @@ applied to this fork. **All six patches are now ported and the firmware builds**
 
 | Region | Used | Size | % |
 |---|---|---|---|
-| flash0 | 198,920 B | 240 KB | 80.9 |
+| flash0 | 198,936 B | 240 KB | 80.9 |
 | ram0 (SRAM) | 40,536 B | 40 KB | ~99.0 (~424 B heap left) |
 | ram4 (CCM) | 4,540 B | 8 KB | 55.4 (fw_update flasher code+data) |
 | flash7 (caldata) | — | 16 KB | reserved |
@@ -36,7 +41,7 @@ applied to this fork. **All six patches are now ported and the firmware builds**
 `usb_msc.c`/`fw_update.c` compile warning-free. Firmware image layout verified:
 `.fwinfo` header (magic `tinySAFW`, model 4, version string) directly after the vector
 table at 0x080001A0, `.fwtrailer` last in flash0, `__fw_image_size__` == `.bin` size
-(198,920 B). Linker ASSERTs guarantee `SAVE_CONFIG_ADDR` (0x0803C000) == end of flash0
+(198,936 B). Linker ASSERTs guarantee `SAVE_CONFIG_ADDR` (0x0803C000) == end of flash0
 and that the trailer is the last data in flash.
 
 ## Completed
