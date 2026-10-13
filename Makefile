@@ -321,6 +321,18 @@ build/obj/hal_pwm_lld.o: CFLAGS += -Wno-implicit-fallthrough # HAL switch fall-t
 # no MPU split); layout is intentional - only silence ld's cosmetic warning.
 LDFLAGS += -Wl,--no-warn-rwx-segments
 
+# Display-only link/output wrappers (defined after the rules.mk include above,
+# so no ChibiOS file is touched). ld-link-wrap.sh runs the real link, hides
+# the zero-length placeholder regions (flash1-6, ram1-3/5-7: `len = 0` in
+# STM32F303xC.ld) from ld's --print-memory-usage table, and saves the table
+# to <elf>.mem for the summary below. size-wrap.sh strips CRs and expands
+# TABs in `size` output. Both forward real output and exit codes unchanged.
+# Ordering-only prerequisites force the sequence elf -> hex -> bin -> dmp ->
+# list so the build tail prints in order. No flags, sources, or layout
+# change: the image is unaffected.
+LD := sh tools/ld-link-wrap.sh $(TRGT)gcc
+SZ := sh tools/size-wrap.sh $(TRGT)size
+
 # Serialize the post-link artifact steps so the build tail prints in order.
 # hex/bin/dmp/list all depend on the same .elf, so under -j8 make runs their
 # "Creating ..." echoes concurrently with ld's --print-memory-usage table and
@@ -335,14 +347,20 @@ $(BUILDDIR)/$(PROJECT).list: $(BUILDDIR)/$(PROJECT).dmp
 # Single-colon hook with the recipe defined here; rules.mk declares it empty,
 # so no overriding-recipe warning. Depending on $(OUTFILES) forces it to
 # run after the serialized artifact steps even under -j.
+# Reprints the curated memory table (nonzero-length regions only, from the
+# <elf>.mem sidecar saved at link time), the size table, and the bin size.
 POST_MAKE_ALL_RULE_HOOK: $(OUTFILES)
 	@echo
 	@echo "================ build summary ================"
 	@echo "Project : $(PROJECT)"
 	@echo "------------------------------------------------"
-	@$(SZ) $(BUILDDIR)/$(PROJECT).elf | expand
+	@sh tools/build-summary.sh $(BUILDDIR)/$(PROJECT).elf
+	@rm -f $(BUILDDIR)/$(PROJECT).elf.mem
+	@echo "------------------------------------------------"
+	@$(SZ) $(BUILDDIR)/$(PROJECT).elf
 	@wc -c $(BUILDDIR)/$(PROJECT).bin
 	@echo "================= build OK ===================="
+
 
 flash: build/$(PROJECT).bin
 	-@printf "reset dfu\r" >/dev/cu.usbmodem401 # mac

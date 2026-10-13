@@ -1,0 +1,4 @@
+# Keep the display-only build-tail helpers LF-only so their grep patterns and
+# variable values never pick up stray CR bytes (sh does not strip CRs from
+# unquoted expansions, which silently broke the placeholder-row filters).
+tools/*.sh text eol=lf

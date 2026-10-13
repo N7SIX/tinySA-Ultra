@@ -177,15 +177,25 @@ Proof of no side effects: two clean builds with `SOURCE_DATE_EPOCH` pinned
 differ in a few bytes regardless of any change, because `main.c` embeds
 `"Build Time: " __DATE__ " - " __TIME__` in the firmware.
 
-## Build-tail ordering (fixed 2026-10-14)
+## Build-tail readability (fixed 2026-10-14)
 
-`hex/bin/dmp/list` all depend only on the `.elf`, so under `-j8` make ran
-their `Creating ...` echoes concurrently with ld's `--print-memory-usage`
-table and the `size` table, jumbling them onto shared lines (e.g.
-`80.96%Creating ...hex`) with TAB glyphs in pasted output. Fixed with
-ordering-only Makefile prerequisites (`elf -> hex -> bin -> dmp -> list`),
-plus a `POST_MAKE_ALL_RULE_HOOK` summary block that reprints
-`size` (tabs expanded) + `bin` byte count for clean copy-paste.
-No flags, sources, or layout changed - the image is unaffected
-(text 194792 / data 4180 / bss 38276, bin 198976 B).
+Two display-layer issues made the post-link tail hard to read; both fixed
+without touching flags, sources, or layout (the image is unaffected):
+
+- Ordering: `hex/bin/dmp/list` all depend only on the `.elf`, so under `-j8`
+  make ran their `Creating ...` echoes concurrently with ld's
+  `--print-memory-usage` table and the `size` table, jumbling them onto shared
+  lines (e.g. `80.96%Creating ...hex`). Fixed with ordering-only Makefile
+  prerequisites (`elf -> hex -> bin -> dmp -> list`).
+- Noise: ld prints all 16 regions from `STM32F303xC.ld`, but `flash1-6` and
+  `ram1-3/5-7` are zero-length placeholders (`len = 0`). `tools/ld-link-wrap.sh`
+  (wrapping `$(LD)`, no ChibiOS file touched) hides only the `0 B / 0 B` rows
+  from the console table, forwards all other stderr and the exit code
+  unchanged, and saves the table to `<elf>.mem` so the summary below can
+  reprint the curated table (values are ld's own numbers, unmodified).
+  `tools/size-wrap.sh` (wrapping `$(SZ)`) strips CRs and expands TABs so the
+  `text/data/bss` table pastes cleanly (no `^I`/`^M`/glyph rendering).
+- A `POST_MAKE_ALL_RULE_HOOK` summary block prints project name, curated
+  memory table, `size` + `bin` byte count for clean copy-paste
+  (text 194792 / data 4180 / bss 38276, bin 198976 B).
 
