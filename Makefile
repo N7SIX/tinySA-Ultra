@@ -321,6 +321,29 @@ build/obj/hal_pwm_lld.o: CFLAGS += -Wno-implicit-fallthrough # HAL switch fall-t
 # no MPU split); layout is intentional - only silence ld's cosmetic warning.
 LDFLAGS += -Wl,--no-warn-rwx-segments
 
+# Serialize the post-link artifact steps so the build tail prints in order.
+# hex/bin/dmp/list all depend on the same .elf, so under -j8 make runs their
+# "Creating ..." echoes concurrently with ld's --print-memory-usage table and
+# the size table, jumbling them onto shared lines. Chaining forces
+# elf -> hex -> bin -> dmp (+ size) -> list (+ Done). Ordering only: no flags,
+# sources, or layout change, so the image is unaffected.
+$(BUILDDIR)/$(PROJECT).bin: $(BUILDDIR)/$(PROJECT).hex
+$(BUILDDIR)/$(PROJECT).dmp: $(BUILDDIR)/$(PROJECT).bin
+$(BUILDDIR)/$(PROJECT).list: $(BUILDDIR)/$(PROJECT).dmp
+
+# Clean copy-paste-friendly summary printed last. Display only.
+# Single-colon hook with the recipe defined here; rules.mk declares it empty,
+# so no overriding-recipe warning. Depending on $(OUTFILES) forces it to
+# run after the serialized artifact steps even under -j.
+POST_MAKE_ALL_RULE_HOOK: $(OUTFILES)
+	@echo
+	@echo "================ build summary ================"
+	@echo "Project : $(PROJECT)"
+	@echo "------------------------------------------------"
+	@$(SZ) $(BUILDDIR)/$(PROJECT).elf | expand
+	@wc -c $(BUILDDIR)/$(PROJECT).bin
+	@echo "================= build OK ===================="
+
 flash: build/$(PROJECT).bin
 	-@printf "reset dfu\r" >/dev/cu.usbmodem401 # mac
 	-@printf "reset dfu\r" >/dev/ttyACM0 # linux

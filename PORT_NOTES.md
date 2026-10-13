@@ -177,3 +177,15 @@ Proof of no side effects: two clean builds with `SOURCE_DATE_EPOCH` pinned
 differ in a few bytes regardless of any change, because `main.c` embeds
 `"Build Time: " __DATE__ " - " __TIME__` in the firmware.
 
+## Build-tail ordering (fixed 2026-10-14)
+
+`hex/bin/dmp/list` all depend only on the `.elf`, so under `-j8` make ran
+their `Creating ...` echoes concurrently with ld's `--print-memory-usage`
+table and the `size` table, jumbling them onto shared lines (e.g.
+`80.96%Creating ...hex`) with TAB glyphs in pasted output. Fixed with
+ordering-only Makefile prerequisites (`elf -> hex -> bin -> dmp -> list`),
+plus a `POST_MAKE_ALL_RULE_HOOK` summary block that reprints
+`size` (tabs expanded) + `bin` byte count for clean copy-paste.
+No flags, sources, or layout changed - the image is unaffected
+(text 194792 / data 4180 / bss 38276, bin 198976 B).
+
