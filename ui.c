@@ -6745,7 +6745,7 @@ redraw_cal_status:
   y += YSTEP + YSTEP/2 ;
 #ifdef TINYSA4 // 'tinySA4_N7SIX_v7.6.x.xxxxxx'
   {
-    char *version_start = &TINYSA_VERSION[13]; // Skip "tinySA4_N7SIX_"
+    const char *version_start = &TINYSA_VERSION[13]; // Skip "tinySA4_N7SIX_"
     // Parse "v7.6.2238.c979386" to create "7.6.2.c9" format
     char *dot1 = strchr(version_start, '.'); // After "v7"
     if (dot1) {
