@@ -5,7 +5,7 @@
 
 #Build target
 ifeq ($(TARGET),)
-  TARGET = F072
+  TARGET = F303
 else
   TARGET = F303
 endif

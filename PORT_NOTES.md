@@ -25,9 +25,16 @@ applied to this fork. **All six patches are now ported and the firmware builds**
   embedded firmware version are e.g. `tinySA4_N7SIX_v7.6.1.7c129a6`.
   `-DVERSION` is baked in at compile time — after new commits run a `clean`
   rebuild to refresh the version string everywhere.
-- The F072/TINYSA3 target does not link (RAM overflows 16 KB by >16 KB) —
-  **pre-existing**, this N7SIX fork is F303-only in practice. All MSC/fw code is
-  `TINYSA4`-guarded and adds nothing to F072 builds.
+- The F072/TINYSA3 target does not link: the fork's features need ~33 KB of
+  data+bss (`measured` 7,200 B, `trace_index_y` 3,600 B, `config` 3,176 B,
+  waterfall thread stack, …) vs 16 KB SRAM. Verified 2026-10-13 against
+  upstream `erikkaashoek/TinySA` at the same ChibiOS pin `0cfe7f528` and the
+  same toolchain: upstream's F072 build links (16.6 KB data+bss) — so this is
+  fork-side drift (larger points/traces/config), not stale ChibiOS or
+  toolchain, and "updating from upstream" would not fix it. Reviving TINYSA3
+  would mean gating the fork's core features for it — not worth it for
+  F303-only hardware. The Makefile now defaults `TARGET` to `F303` so a bare
+  `make` cannot trigger it. All MSC/fw code is `TINYSA4`-guarded.
 
 ## F303 build result (2026-10-13, arm-none-eabi-gcc 14.3)
 
