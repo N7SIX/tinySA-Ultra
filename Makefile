@@ -307,13 +307,19 @@ $(shell rm -f -rf build/tinySA4* build/lst/*.* build/obj/*.*)
 endif
 endif
 
-ifeq ($(TARGET),F303)
-clean:
-	rm -f -rf build/tinySA4* build/lst/*.* build/obj/*.*
-else
-clean:
-	rm -f -rf build/$(PROJECT).* build/lst/*.* build/obj/*.*
-endif
+# 'clean' comes from ChibiOS rules.mk (removes .dep and the whole build/);
+# redefining it here triggers "overriding recipe for target 'clean'" warnings.
+
+# GCC 14 diagnostics that fire only inside ChibiOS/CMSIS sources we do not own.
+# Warning suppression never changes code generation, and it is applied per
+# object so fork code keeps full -Wall -Wextra coverage.
+build/obj/chcore_v7m.o: CFLAGS += -Wno-deprecated             # CMSIS "sp" in asm clobber list
+build/obj/board.o:      CFLAGS += -Wno-deprecated             # CMSIS header via __early_init
+build/obj/hal_pwm_lld.o: CFLAGS += -Wno-implicit-fallthrough # HAL switch fall-throughs
+
+# The image places code and data in one RWX flash segment (normal for Cortex-M,
+# no MPU split); layout is intentional - only silence ld's cosmetic warning.
+LDFLAGS += -Wl,--no-warn-rwx-segments
 
 flash: build/$(PROJECT).bin
 	-@printf "reset dfu\r" >/dev/cu.usbmodem401 # mac

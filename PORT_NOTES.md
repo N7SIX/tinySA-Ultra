@@ -154,3 +154,26 @@ targets the six patches only, not a full upstream merge.
 - On-device validation still pending: USB enumeration as composite CDC+MSC, `usbdisk on`
   from shell and menu, SD read/write from PC, eject, `fwupdate` dry run and a real
   install (keep DFU access available for the first flash back if anything is wrong).
+
+## Build-warning hygiene (GCC 14)
+
+Upstream's build emits ten warnings with the current Arm GNU toolchain 14.3.
+All are cosmetic and live in ChibiOS/CMSIS or the Makefile; they are now
+handled without touching any generated code (proved by byte-identical images):
+
+- `clean` recipe duplicated with ChibiOS `rules.mk` (2x): our duplicate rule was
+  removed; `make clean` now uses rules.mk's rule (removes `.dep` and all of
+  `build/`, a strict superset of the old behaviour).
+- CMSIS `"sp"` asm-clobber deprecation (3x: `chcore_v7m.c`, `board.c`) and the
+  HAL PWM switch fall-throughs (4x: `hal_pwm_lld.c`): silenced with
+  `-Wno-deprecated` / `-Wno-implicit-fallthrough` applied **per object** in the
+  Makefile, so fork sources keep full `-Wall -Wextra` coverage.
+- ld "LOAD segment with RWX permissions" (1x): `-Wl,--no-warn-rwx-segments`;
+  code+data in one flash segment is normal for Cortex-M images.
+
+Proof of no side effects: two clean builds with `SOURCE_DATE_EPOCH` pinned
+(with vs without these Makefile lines) produced byte-identical `.bin` files
+(md5 `78608f0d7128c90690a19876c62d76cf`). Note that ordinary rebuilds always
+differ in a few bytes regardless of any change, because `main.c` embeds
+`"Build Time: " __DATE__ " - " __TIME__` in the firmware.
+
