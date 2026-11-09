@@ -40,7 +40,6 @@ int32_t frequencyExtra;
 
 static BaseSequentialStream *shell_stream;
 threads_queue_t shell_thread;
-
 #ifdef __USE_USB_MSC__
 volatile bool shell_direct_cmd = false;  // Shell thread executes a command itself (not in the sweep thread)
 #endif
@@ -64,6 +63,7 @@ char shell_line[VNA_SHELL_MAX_LENGTH];
 char *shell_args[VNA_SHELL_MAX_ARGUMENTS + 1];
 uint16_t shell_nargs;
 static volatile vna_shellcmd_t  shell_function = 0;
+static volatile bool shell_function_ui;     // shell_function may also run in a UI wait loop (CMD_RUN_IN_UI)
 
 //#define ENABLED_DUMP
 // Allow get threads debug info
@@ -98,7 +98,6 @@ uint16_t redraw_request = 0; // contains REDRAW_XXX flags
 const char * const info_about[]={
   BOARD_NAME,
   "2025-2030 Copyright @Sean Ebue, N7SIX",
-  "2019-2024 Copyright @Erik Kaashoek",
   "2016-2020 Copyright @edy555",
   "SW licensed under GPL. See: https://github.com/N7SIX/tinySA",
   "Version: " VERSION,
@@ -145,6 +144,49 @@ systime_t restart_interval = 0;
 static THD_WORKING_AREA(waThread1, 768);
 bool has_esd = false;
 #endif
+// Run the console command the shell thread handed over. Always in the sweep thread, so a command
+// never uses the LCD at the same time as the screen (two threads on the SPI DMA hang the tinySA).
+// ui_wait: called from a loop that waits for the user (keypad, version screen, "touch to continue"),
+// there only a CMD_RUN_IN_UI command (capture) runs, the others wait for the sweep loop.
+void shell_run_pending(bool ui_wait)
+{
+  chSysLock();
+  vna_shellcmd_t local_func = shell_function;
+  if (ui_wait && !shell_function_ui)
+    local_func = 0;
+  else {
+    shell_function = 0;
+    shell_function_ui = false;
+    // The shell sets OP_CONSOLE together with shell_function, a request without a
+    // command (direct command, timed out command) has done its job: the sweep stopped
+    operation_requested &= ~OP_CONSOLE;
+  }
+  chSysUnlock();
+
+  if (local_func) {
+    if (!ui_wait)                  // a UI wait loop keeps a pending touch or lever event
+      operation_requested = OP_NONE; // otherwise commands will be aborted
+    local_func(shell_nargs - 1, &shell_args[1]);
+
+    if (ui_wait || operation_requested == OP_NONE) // Don't prompt if aborted
+      shell_printf(VNA_SHELL_PROMPT_STR);
+
+    // Resume shell thread
+    if (!abort_enabled) {
+      chSysLock();
+      osalThreadDequeueNextI(&shell_thread, MSG_OK);
+      chSysUnlock();
+    }
+
+    if (dirty && !ui_wait) {      // not over the screen that waits
+      if (MODE_OUTPUT(setting.mode))
+        draw_menu();    // update screen if in output mode and dirty
+      else
+        redraw_request |= REDRAW_CAL_STATUS | REDRAW_AREA | REDRAW_FREQUENCY;
+    }
+  }
+}
+
 static THD_FUNCTION(Thread1, arg)
 {
   (void)arg;
@@ -166,7 +208,8 @@ static THD_FUNCTION(Thread1, arg)
   while (1) {
 //  START_PROFILE
     if (sweep_mode&(SWEEP_ENABLE|SWEEP_ONCE)) {
-      backup_t b;
+      /* Initialize the reserved byte covered by the checksum too. */
+      backup_t b = {0};
       b.data.frequency0 = setting.frequency0;
       b.data.frequency1 = setting.frequency1;
       if (setting.auto_attenuation)
@@ -263,35 +306,7 @@ static THD_FUNCTION(Thread1, arg)
         __WFI();
     }
 //  STOP_PROFILE
-    // Run Shell command in sweep thread
-    vna_shellcmd_t local_func;
-
-    chSysLock();
-    local_func = shell_function;
-    shell_function = 0;
-    chSysUnlock();
-
-    if (local_func) {
-      operation_requested = OP_NONE; // otherwise commands will be aborted
-      local_func(shell_nargs - 1, &shell_args[1]);
-
-      if (operation_requested == OP_NONE) // Don't prompt if aborted
-        shell_printf(VNA_SHELL_PROMPT_STR);
-
-      // Resume shell thread
-      if (!abort_enabled) {
-        chSysLock();
-        osalThreadDequeueNextI(&shell_thread, MSG_OK);
-        chSysUnlock();
-      }
-
-      if (dirty) {
-        if (MODE_OUTPUT(setting.mode))
-          draw_menu();    // update screen if in output mode and dirty
-        else
-          redraw_request |= REDRAW_CAL_STATUS | REDRAW_AREA | REDRAW_FREQUENCY;
-      }
-    }
+    shell_run_pending(false);
 #ifdef __USE_USB_MSC__
     // "usbdisk on" from the shell
     if (msc_enter_request) {
@@ -302,11 +317,8 @@ static THD_FUNCTION(Thread1, arg)
 #endif
 //    START_PROFILE
     // Process UI inputs
-    if (!(sweep_mode & SWEEP_SELFTEST)) {
-      sweep_mode|= SWEEP_UI_MODE;
+    if (!(sweep_mode & SWEEP_SELFTEST))
       ui_process();
-      sweep_mode&=~SWEEP_UI_MODE;
-    }
     // Process collected data, calculate trace coordinates and plot only if scan
     // completed
     if (completed) {
@@ -963,16 +975,12 @@ VNA_SHELL_FUNCTION(cmd_menu)
 }
 
 uint8_t remote_text = false;
+uint8_t keypad_open = false;        // set by ui.c while the sweep thread waits for keypad input
 VNA_SHELL_FUNCTION(cmd_text)
 {
   if (argc!= 1)
     return;
-  char *p = argv[0];
-  char *t = kp_buf;
-  while (*p) {
-    *t++ = *p++;
-  }
-  *t = 0;
+  ui_set_keypad_text(argv[0]);
   uistat.value = my_atof(kp_buf);
   uistat.freq_value = my_atoui(kp_buf);
   set_numeric_value();
@@ -989,10 +997,21 @@ VNA_SHELL_FUNCTION(cmd_remark)
 #ifdef __REMOTE_DESKTOP__
 uint8_t remote_mouse_down = false;
 uint8_t auto_capture = false;
+#ifdef __REFRESH_RLE__
+uint8_t remote_hold = false;
+static bool send_region_rle8(remote_region_t *rd, const pixel_t *px);
+#endif
 
 void send_region(remote_region_t *rd, uint8_t * buf, uint16_t size)
 {
+#ifdef __REFRESH_RLE__
+  if (remote_hold) return;
+#endif
   if (SDU1.config->usbp->state == USB_ACTIVE) {
+#ifdef __REFRESH_RLE__
+    if (auto_capture == 2 && rd->new_str[0] == 'b' && send_region_rle8(rd, (const pixel_t *)buf))
+      return;
+#endif
     streamWrite(shell_stream, (void*) rd, sizeof(remote_region_t));
     streamWrite(shell_stream, (void*) buf, size);
     streamWrite(shell_stream, (void*)"ch> ", 4);
@@ -1004,7 +1023,11 @@ void send_region(remote_region_t *rd, uint8_t * buf, uint16_t size)
 VNA_SHELL_FUNCTION(cmd_refresh)
 {
 // read pixel count at one time (PART*2 bytes required for read buffer)
+#ifdef __REFRESH_RLE__
+  int m = generic_option_cmd("refresh", "off|on|rle", argc, argv[0]);
+#else
   int m = generic_option_cmd("refresh", "off|on", argc, argv[0]);
+#endif
   if (m>=0) {
     auto_capture = m;
   }
@@ -1117,12 +1140,15 @@ static bool capture_rle8(void)
 #endif
   static const struct {uint16_t header, width, height; uint8_t bit_per_pixel, compression;}
     rle8_header = {0x4D42, LCD_WIDTH, LCD_HEIGHT, 8, 1};
+  // spi_buffer: u16 size + packed row (at most 2 + LCD_WIDTH + LCD_WIDTH/128 + 1 bytes), then the
+  // two row buffers of capture_read_row(). A row is replaced by its indices in place.
   uint16_t *packed = spi_buffer;
   uint16_t *rows   = &spi_buffer[256];
   capture_colors = 0;
   for (int i = 0; i < MAX_PALETTE; i++)
     capture_palette_add(GET_PALTETTE_COLOR(i));
   plot_capture_colors();
+  // With other content on the screen first add the colours on it (pass 0), then send (pass 1)
   for (int pass = capture_verify ? 0 : 1; pass < 2; pass++) {
     uint16_t colors = capture_colors, c = capture_palette[0];
     int i = 0;
@@ -1163,6 +1189,47 @@ static bool capture_rle8(void)
   }
   return true;
 }
+
+#ifdef __REFRESH_RLE__
+/*
+ * "refresh rle": a bulk push of 256 pixels or more is sent RLE8 packed with its own palette:
+ *   "rle8\r\n", x, y, w, h, u16 palette size in bytes, palette, then the palette indices of all
+ *   w * h pixels as one PackBits stream without lengths (the receiver unpacks until it has w * h),
+ *   so runs of background continue over the rows. Smaller pushes fit the USB queue and stay "bulk",
+ *   as do regions with too many colours to get smaller.
+ */
+static uint16_t rle8_buf[32 + LCD_WIDTH / 2];          // packed part, its indices from byte 64
+static bool send_region_rle8(remote_region_t *rd, const pixel_t *px)
+{
+  int n = rd->w * rd->h, i = 0, k, m, x;
+  pixel_t c = ~px[0];
+  if (n < 256)
+    return false;
+  capture_colors = 0;
+  for (x = 0; x < n; x++)                              // the palette of the region
+    if (px[x] != c && !capture_palette_add(c = px[x]))
+      return false;
+  if (2 * capture_colors + n / 64 + 2 > n)             // packed it could be larger than raw
+    return false;
+  uint16_t size = capture_colors * sizeof(pixel_t);
+  memcpy(rd->new_str, "rle8\r\n", sizeof(rd->new_str));
+  streamWrite(shell_stream, (void *)rd, sizeof(remote_region_t));
+  streamWrite(shell_stream, (void *)&size, sizeof(size));
+  streamWrite(shell_stream, (void *)capture_palette, size);
+  uint8_t *index = (uint8_t *)&rle8_buf[32];
+  for (k = 0, c = ~px[0]; k < n; k += m) {             // LCD_WIDTH indices at a time, packed in place
+    m = n - k < LCD_WIDTH ? n - k : LCD_WIDTH;
+    for (x = 0; x < m; x++, px++) {
+      if (*px != c)
+        i = capture_palette_find(c = *px);
+      index[x] = i;
+    }
+    streamWrite(shell_stream, (void *)rle8_buf, packbits(index, (uint8_t *)rle8_buf, m));
+  }
+  streamWrite(shell_stream, (void *)"ch> ", 4);
+  return true;
+}
+#endif
 #endif
 
 VNA_SHELL_FUNCTION(cmd_capture)
@@ -1647,7 +1714,7 @@ VNA_SHELL_FUNCTION(cmd_scan)
   }
   if (argc >= 3) {
     int points = my_atoi(argv[2]);
-    if (points <= 0 || points > POINTS_COUNT) {
+    if (points < 2 || points > POINTS_COUNT) {
       shell_printf("sweep points exceeds range "define_to_STR(POINTS_COUNT)"\r\n");
       return;
     }
@@ -2256,15 +2323,23 @@ show_one:
   static const char cmd_load_list[] = "copy|freeze|subtract|view|value";
   if (argc >= 2) {
     switch (get_str_index(argv[next_arg++], cmd_load_list)) {
-    case 0:
-      store_trace(t, my_atoi(argv[next_arg++])-1); // copy {trace}
+    case 0: {
+      int destination = my_atoi(argv[next_arg++])-1; // copy {trace}
+      if ((uint32_t)destination >= TRACES_MAX)
+        goto usage;
+      store_trace(t, destination);
       goto update;
+      }
     case 1:
       setting.stored[t]= (get_str_index(argv[next_arg++], "off|on") == 1); // freeze {off|on}
       goto update;
-    case 2:
-      subtract_trace(t,my_atoi(argv[next_arg++])-1);
+    case 2: {
+      int source = my_atoi(argv[next_arg++])-1;
+      if ((uint32_t)source >= TRACES_MAX)
+        goto usage;
+      subtract_trace(t, source);
       goto update;
+      }
     case 3:
       if (get_str_index(argv[next_arg++], "off|on") == 1)
         { TRACE_ENABLE(1<<t); }
@@ -2273,8 +2348,10 @@ show_one:
       goto update;
     case 4:
       {
+      if (argc != 3)
+        goto usage;
       int i = my_atoi(argv[next_arg++]);
-      if (i>= sweep_points)
+      if ((uint32_t)i >= sweep_points)
         goto usage;
       float v = my_atof(argv[next_arg]);
       measured[t][i] = v;
@@ -2353,8 +2430,12 @@ VNA_SHELL_FUNCTION(cmd_marker)
       //      M_NORMAL=0,M_REFERENCE=1, M_DELTA=2, M_NOISE=4, M_STORED=8, M_AVER=16, M_TRACKING=32, M_DELETE=64  // Tracking must be last.
     case 3:
       tr=0;
-      if (argc == 3 && argv[2][0] >= '1' && argv[2][0] <= '9') {
+      if (argc != 3)
+        goto usage;
+      if (argv[2][0] >= '1' && argv[2][0] <= '9') {
         tr = my_atoui(argv[2])-1;
+        if ((uint32_t)tr >= MARKERS_MAX)
+          goto usage;
         markers[t].mtype |= M_DELTA;
         markers[t].ref= tr;
       } else if (get_str_index(argv[2],cmd_marker_on_off) == 0) {
@@ -2368,10 +2449,11 @@ VNA_SHELL_FUNCTION(cmd_marker)
       marker_mask = M_TRACKING;
       goto set_mask;
     case 6:
-      tr=0;
-      if (argc == 3 && argv[2][0] >= '1' && argv[2][0] <= '9') {
-        tr = my_atoui(argv[2])-1;
-      }
+      if (argc != 3 || argv[2][0] < '1' || argv[2][0] > '9')
+        goto usage;
+      tr = my_atoui(argv[2])-1;
+      if ((uint32_t)tr >= TRACES_MAX)
+        goto usage;
       markers[t].trace= tr;
       return;
     case 7:
@@ -2500,14 +2582,14 @@ typedef struct version_t {
   const char *hw_text;
 } version_t;
 
-#define MAX_VERSION_TEXT    5
-const version_t hw_version_text[MAX_VERSION_TEXT] =
+const version_t hw_version_text[] =
 {
  { 165, 179,    "V0.4.5.1",     1,      0, " ZS405"},
  { 180, 195,    "V0.4.5.1.1",   2,      0, " ZS405"},
  { 250, 350,    "V0.4.6",       3,      1, "+ ZS406"},
  { 2200, 2299,  "V0.5.4",       103,    1, "+ ZS407"},
 };
+#define MAX_VERSION_TEXT    (sizeof(hw_version_text) / sizeof(hw_version_text[0]))
 
 uint16_t hwid = 0;
 uint16_t hw_if = 0;
@@ -2522,7 +2604,7 @@ const char *get_hw_version_text(void)
     chThdSleepMilliseconds(1);
     v = adc1_single_read(0);
   }
-  for (int i=0; i<MAX_VERSION_TEXT;i++) {
+  for (size_t i=0; i<MAX_VERSION_TEXT;i++) {
     if (hw_version_text[i].min_adc <= v && v <= hw_version_text[i].max_adc) {
       hwid = hw_version_text[i].hwid;
       hw_if = hw_version_text[i].hw_if;
@@ -2599,7 +2681,7 @@ VNA_SHELL_FUNCTION(cmd_color)
     return;
   }
   i = my_atoi(argv[0]);
-  if (i >= MAX_PALETTE)
+  if (i < 0 || i >= MAX_PALETTE)
     return;
   color = RGBHEX(my_atoui(argv[1]));
   config.lcd_palette[i] = color;
@@ -2746,17 +2828,17 @@ static const VNAShellCommand commands[] =
 #endif
     {"capture"     , cmd_capture     , CMD_WAIT_MUTEX | CMD_RUN_IN_UI},
 #ifdef __REMOTE_DESKTOP__
-    {"refresh"     , cmd_refresh     , 0},
-    {"touch"       , cmd_touch       , 0},
-    {"release"     , cmd_release     , 0},
+    {"refresh"     , cmd_refresh     , CMD_DISK_OK},
+    {"touch"       , cmd_touch       , CMD_DISK_OK},
+    {"release"     , cmd_release     , CMD_DISK_OK},
 #endif
     {"vbat"        , cmd_vbat        , CMD_WAIT_MUTEX},     // Uses same adc as touch!!!!!
 #ifdef ENABLE_VBAT_OFFSET_COMMAND
     {"vbat_offset" , cmd_vbat_offset , CMD_RUN_IN_LOAD},
 #endif
-    {"help"        , cmd_help        , 0},
+    {"help"        , cmd_help        , CMD_DISK_OK},
 #ifdef ENABLE_INFO_COMMAND
-    {"info"        , cmd_info        , 0},
+    {"info"        , cmd_info        , CMD_DISK_OK},
 #endif
 #ifdef ENABLE_COLOR_COMMAND
     {"color"       , cmd_color       , CMD_RUN_IN_LOAD},
@@ -2978,6 +3060,7 @@ static void shell_init_connection(void) {
  *  Set I/O stream (SDU1 or SD1) for shell
  */
   PREPARE_STREAM;
+  shell_reset_console();
 }
 
 #else
@@ -2993,6 +3076,10 @@ static bool shell_check_connect(void){
 
 // Init shell I/O connection over USB
 static void shell_init_connection(void){
+/*
+ * Init shell thread object (need for switch threads)
+ */
+  osalThreadQueueObjectInit(&shell_thread);
 /*
  * Initializes and start serial-over-USB CDC driver SDU1, connected to USBD1
  */
@@ -3116,8 +3203,6 @@ static void VNAShell_executeLine(char *line)
   const VNAShellCommand *scp = VNAShell_parceLine(line);
   if (scp) {
     uint16_t cmd_flag = scp->flags;
-    // Skip wait mutex if process UI
-    if ((cmd_flag & CMD_RUN_IN_UI) && (sweep_mode&SWEEP_UI_MODE)) cmd_flag&=~CMD_WAIT_MUTEX;
 #ifdef __USE_USB_MSC__
     // In USB DISK mode SPI1 and spi_buffer belong to the mass storage, only run commands that do not use them.
     // shell_direct_cmd tells usb_disk_mode() to wait for a command already running in this thread.
@@ -3136,12 +3221,19 @@ static void VNAShell_executeLine(char *line)
         shell_printf("firmware update active" VNA_SHELL_NEWLINE_STR VNA_SHELL_PROMPT_STR);
       else
 #endif
-        shell_printf("usb disk mode active" VNA_SHELL_NEWLINE_STR VNA_SHELL_PROMPT_STR);
+      shell_printf("usb disk mode active" VNA_SHELL_NEWLINE_STR VNA_SHELL_PROMPT_STR);
       return;
     }
 #endif
+    // The sweep thread stays in an open keypad until it closes: answer at once instead of a 20 s timeout.
+    // A CMD_RUN_IN_UI command (capture) runs there in shell_run_pending().
+    if ((cmd_flag & (CMD_WAIT_MUTEX | CMD_RUN_IN_UI)) == CMD_WAIT_MUTEX && keypad_open) {
+      shell_printf("keypad active" VNA_SHELL_NEWLINE_STR VNA_SHELL_PROMPT_STR);
+      return;
+    }
     if (cmd_flag & CMD_WAIT_MUTEX) {
       chSysLock();
+      shell_function_ui = cmd_flag & CMD_RUN_IN_UI;
       shell_function = scp->sc_function;
       operation_requested|=OP_CONSOLE;      // this will abort current sweep to give priority to the new request
       chSysUnlock();
@@ -3177,7 +3269,9 @@ static void VNAShell_executeLine(char *line)
 #else
       if (dirty) {
 #endif
-        operation_requested = true;   // ensure output is updated
+        chSysLock();
+        operation_requested |= OP_CONSOLE;  // ensure output is updated: stop the sweep, not a lever event
+        chSysUnlock();
         if (MODE_OUTPUT(setting.mode))
           draw_menu();    // update screen if in output mode and dirty
         else
@@ -3472,9 +3566,6 @@ int main(void)
   adc_init();
   PULSE
   DAC->CR|= DAC_CR_EN1 | DAC_CR_EN2; // Use DAC: CH1 and CH2
-  #ifdef  __LCD_BRIGHTNESS__
-    lcd_setBrightness(DEFAULT_BRIGHTNESS);
-  #endif
   DAC->DHR12R1 = 0;                  // Setup DAC: CH1 value
 
   /*
@@ -3485,6 +3576,11 @@ int main(void)
 #endif
   ili9341_init();
   PULSE
+  #ifdef  __LCD_BRIGHTNESS__
+    // Backlight on only now the screen is cleared: a panel in reset or before its init
+    // shows white (the ZS405 panel, ZS406/ZS407 stay black)
+    lcd_setBrightness(DEFAULT_BRIGHTNESS);
+  #endif
 
 #ifdef TINYSA4
   ili9341_set_foreground(LCD_FG_COLOR);

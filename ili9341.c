@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright (c) 2019-2020, Dmitry (DiSlord) dislordlive@gmail.com
  * Based on TAKAHASHI Tomohiro (TTRFTECH) edy555@gmail.com
  * All rights reserved.
@@ -504,6 +504,12 @@ void lcd_setBrightness(uint16_t b){
 }
 #endif
 
+#ifdef __LCD_BRIGHTNESS__
+#define LCD_WAKE_UP_MS  120   // after sleep out the panel supplies settle, the backlight comes on after the init
+#else
+#define LCD_WAKE_UP_MS  2     // backlight not controlled: a longer wait only shows the uninitialised panel longer
+#endif
+
 void ili9341_init(void)
 {
   LCD_DC_DATA;
@@ -513,8 +519,8 @@ void ili9341_init(void)
   const uint8_t *p;
   for (p = LCD_INIT; *p; ) {
     send_command(p[0], p[1], &p[2]);
+    chThdSleepMilliseconds(p[0] == ILI9341_SLEEP_OUT ? LCD_WAKE_UP_MS : 2);
     p += 2 + p[1];
-    chThdSleepMilliseconds(2);
   }
 #ifdef TINYSA4
   if ((hwid % 100) >= 2) {
@@ -1451,7 +1457,7 @@ error_tx:
 static uint8_t SD_SendCmd(uint8_t cmd, uint32_t arg) {
   uint8_t buf[6];
   volatile uint8_t r1;
-  // wait SD ready after last Tx (recommended timeout is 250ms (500ms for SDXC) set 250ms
+  // wait SD ready after last Tx (recommended timeout is 250ms (500ms for SDXC) set 250ms)
   // Not for STOP_TRANSMISSION: during a multiple block read the card is sending data, not busy,
   // and the data can contain no 0xFF at all (then CMD12 would never be sent)
   if (cmd != CMD12 && (r1 = SD_WaitNotBusy(MS2ST(500))) != 0xFF) {

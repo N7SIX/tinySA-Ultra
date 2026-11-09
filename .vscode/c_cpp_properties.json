@@ -11,7 +11,7 @@
             ],
             "defines": ["STM32F072xB"],
             "macFrameworkPath": [],
-            "compilerPath": "/usr/bin/arm-none-eabi-gcc",
+            "compilerPath": "/usr/local/bin/arm-none-eabi-gcc",
             "cStandard": "c11",
             "cppStandard": "c++17"
         }

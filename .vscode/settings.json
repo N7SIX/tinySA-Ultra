@@ -1,10 +1,4 @@
 {
     "C_Cpp.errorSquiggles": "Disabled",
-    "cpplint.filters": ["-build/include_subdir", "-build/include_order", "-readability/casting", "-whitespace/comments"],
-    "explorer.excludeGitIgnore": false,
-    "files.exclude": {
-        "build": false,
-        "**/build": false,
-        "**/build/**": false
-    }
+    "cpplint.filters": ["-build/include_subdir", "-build/include_order", "-readability/casting", "-whitespace/comments"]
 }

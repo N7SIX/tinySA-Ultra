@@ -96,9 +96,11 @@ char    kp_buf[NUMINPUT_LEN+2];  // !!!!!! WARNING size must be + 2 from NUMINPU
 #else
 char    kp_buf[TXTINPUT_LEN+1];  // !!!!!! WARNING size must be + 2 from NUMINPUT_LEN or TXTINPUT_LEN + 1
 #endif
-static uint8_t ui_mode = UI_NORMAL;
-static uint8_t keypad_mode;
-static char   *kp_help_text = NULL;
+
+void ui_set_keypad_text(const char *text)
+{
+  plot_printf(kp_buf, sizeof(kp_buf), "%s", text);
+}
 
 // Set when kp_buf holds a default that the next keypad must start with instead
 // of an empty buffer, so a single ENTER accepts it unchanged
@@ -107,7 +109,7 @@ static bool keypad_text_preset = false;
 // Set while handling a keypad key that was held down longer than a short tap
 static bool keypad_long_press = false;
 
-#ifdef __SD_FILE_BROWSER__
+#if defined(__SD_FILE_BROWSER__) || defined(TINYSA4)
 // Preset the keypad input with the first len characters of text
 static void ui_preset_keypad_text(const char *text, int len)
 {
@@ -119,6 +121,9 @@ static void ui_preset_keypad_text(const char *text, int len)
 }
 #endif
 
+static uint8_t ui_mode = UI_NORMAL;
+static uint8_t keypad_mode;
+static char   *kp_help_text = NULL;
 uint8_t menu_current_level = 0;
 static int  selection = 0;
 static const uint8_t slider_bitmap[]=
@@ -207,6 +212,7 @@ int btn_side(void)
 static int btn_check(void)
 {
   systime_t ticks;
+  shell_run_pending(true);            // capture while a screen waits for the jog button
 #ifdef __WATCHDOG__
   wdgReset(&WDGD1);
 #endif
@@ -284,7 +290,7 @@ static int btn_wait_release(void)
 #ifdef SOFTWARE_TOUCH
 // ADC read count for measure X and Y (2^N count)
 #define TOUCH_X_N 3
-#define TOUCH_Y_N 3
+#define TOUCH_Y_N 4
 static int
 touch_measure_y(void)
 {
@@ -397,6 +403,7 @@ static void touch_init(void){
 static int
 touch_check(void)
 {
+  shell_run_pending(true);            // capture while a screen waits for a touch
 #ifdef TINYSA4
   if (setting.lock_display)
     return EVT_TOUCH_NONE;
@@ -678,6 +685,7 @@ show_version(void)
   ili9341_drawstring_10x14(info_about[i++], x , y);
   ili9341_drawstring_10x14(hw_text, x + 138 , y);
   y+=FONT_GET_HEIGHT*3+2-5;
+  ili9341_drawstring_7x13(info_about[i++], x , y);
   while (info_about[i]) {
     do {shift>>=1; y+=5;} while (shift&1);
     ili9341_drawstring_7x13(info_about[i++], x, y+=bFONT_STR_HEIGHT+2-5);
@@ -701,10 +709,12 @@ extern const char *states[];
 #else
     uint32_t stklimit = 0U;
 #endif
-    lcd_printf(x, y+=bFONT_STR_HEIGHT, "%08x|%08x|%08x|%08x|%4u|%4u|%9s|%12s",
+    // The font is proportional (a space is narrower than a digit), padding with spaces does not align:
+    // zero padded numbers, the name after them, the state at a fixed position
+    lcd_printf(x, y+=bFONT_STR_HEIGHT, "%08x|%08x|%08x|%08x|%u|%03u|%s",
              stklimit, (uint32_t)tp->ctx.sp, max_stack_use, (uint32_t)tp,
-             (uint32_t)tp->refs - 1, (uint32_t)tp->prio, states[tp->state],
-             tp->name == NULL ? "" : tp->name);
+             (uint32_t)tp->refs - 1, (uint32_t)tp->prio, tp->name == NULL ? "" : tp->name);
+    lcd_printf(x + 330, y, "%s", states[tp->state]);
     tp = chRegNextThread(tp);
   } while (tp != NULL);
 #endif
@@ -1199,6 +1209,11 @@ const uint8_t right_icons [] =
 #define KP_500  40
 
 enum {NUM_KEYBOARD, TXT_KEYBOARD};
+#ifdef __USE_SD_CARD__
+#define IS_TXT_KEYBOARD (keypads[0].c == TXT_KEYBOARD)
+#else
+#define IS_TXT_KEYBOARD false           // keypads_text needs the SD card, the text keypad code is left out
+#endif
 
 typedef struct {
   uint16_t x_offs;
@@ -1553,7 +1568,7 @@ static const struct {
 #ifdef __USE_RTC__
 [KM_RTC_DATE]     = {keypads_positive    , "SET DATE\n YYMMDD"}, // Date
 [KM_RTC_TIME]     = {keypads_positive    , "SET TIME\n HHMMSS"}, // Time
-[KM_INTERVAL]     = {keypads_positive    , "SET INTERVAL\n HHMMSS"}, // Interval
+[KM_INTERVAL]     = {keypads_positive    , "REPEAT\nHHMMSS"}, // Interval
 #endif
 [KM_PRESET_NAME]   = {keypads_text ,          "NAME"},  // KM_PRESET_NAME
 #endif
@@ -1677,8 +1692,13 @@ static UI_FUNCTION_ADV_CALLBACK(menu_sweep_acb)
   (void)item;
   if (b){
     if (setting.level_sweep != 0 || get_sweep_frequency(ST_SPAN) != 0)  {
+#ifdef TINYSA4
+      plot_printf(b->text, sizeof b->text, "SW:%.3Q-%.3QHz %+ddB %.3Fs",
+                  get_sweep_frequency(ST_START), get_sweep_frequency(ST_STOP),
+#else
       plot_printf(b->text, sizeof b->text, "SW:%3.2fMHz %+ddB %.3Fs",
                   get_sweep_frequency(ST_SPAN) / 1000000.0,
+#endif
                   (int)setting.level_sweep,
                   setting.sweep_time_us/(float)ONE_SECOND_TIME);
     }
@@ -2187,6 +2207,23 @@ static UI_FUNCTION_ADV_CALLBACK(menu_mode_acb)
   redraw_request |= REDRAW_CAL_STATUS;
 }
 
+// After a preset load: a generator preset starts with the output off, a mode change shows the menu of the new mode
+static void menu_preset_loaded(int old_mode)
+{
+  bool output = MODE_OUTPUT(setting.mode);
+  if (output)
+    setting.mute = true;
+  if (setting.mode == old_mode) {
+    menu_move_back(!output);      // a generator returns to its form menu
+    return;
+  }
+  menu_move_top();
+  if (output)
+    menu_push_submenu(setting.mode == M_GENLOW ? menu_lowoutputmode : menu_highoutputmode);
+  else
+    ui_mode_normal();
+}
+
 static UI_FUNCTION_ADV_CALLBACK(menu_load_preset_acb)
 {
   (void)item;
@@ -2203,11 +2240,12 @@ static UI_FUNCTION_ADV_CALLBACK(menu_load_preset_acb)
       plot_printf(b->text, sizeof(b->text), "EMPTY %d", (int)data);
     return;
   }
+  int old_mode = setting.mode;
   if (caldata_recall(data) == -1) {
     if (data == 0)
       reset_settings(setting.mode);  // Restore factory defaults
   }
-  menu_move_back(true);
+  menu_preset_loaded(old_mode);
 }
 
 static UI_FUNCTION_ADV_CALLBACK(menu_store_preset_acb)
@@ -2239,6 +2277,23 @@ static UI_FUNCTION_ADV_CALLBACK(menu_store_preset_acb)
   }
 #ifdef TINYSA4
   else {
+    // Offer the name of the active preset, so a single ENTER keeps it: the SD file
+    // it was loaded from, else the name it was stored under
+    const char *name = setting.preset_name;
+    int len = strlen(name);
+#ifdef __SD_FILE_BROWSER__
+    if (sd_preset_path[0]) {
+      name = sd_preset_path;
+      len = strlen(name);
+      int ext = sizeof(".prs") - 1;
+      if (len > ext && name[len - ext] == '.')
+        len -= ext;
+    }
+#endif
+    if (len > PRESET_NAME_LENGTH - 1)             // show only what the slot can hold
+      len = PRESET_NAME_LENGTH - 1;
+    if (len > 0)
+      ui_preset_keypad_text(name, len);
     kp_help_text = "Preset name";
     ui_mode_keypad(KM_PRESET_NAME);
   }
@@ -3313,7 +3368,7 @@ static UI_FUNCTION_ADV_CALLBACK(menu_trigger_level_acb)
           format = "LEVEL\n\b%.3F%s"; // 5 characters incl u, m, etc...
         else
           format = "LEVEL\n\b%.1f%s";
-        plot_printf(b->text, sizeof(b->text), format, setting.trigger_level,unit_string[setting.unit]);
+        plot_printf(b->text, sizeof(b->text), format, value(setting.trigger_level),unit_string[setting.unit]);
       } else {
         plot_printf(b->text, sizeof(b->text), "LEVEL\n\bTRACE %d", setting.trigger_trace+1);
       }
@@ -4081,14 +4136,14 @@ static UI_FUNCTION_ADV_CALLBACK(menu_settings_draw_line_acb){
 }
 #endif
 #ifdef __HAM_BAND__
+// data: 1 = HAM bands, 2 = band table (multi band off)
 static UI_FUNCTION_ADV_CALLBACK(menu_settings_ham_bands){
   (void)item;
-  (void)data;
   if(b){
-    b->icon = config.hambands ? BUTTON_ICON_CHECK : BUTTON_ICON_NOCHECK;
+    b->icon = config.hambands & data ? BUTTON_ICON_CHECK : BUTTON_ICON_NOCHECK;
     return;
   }
-  toggle_hambands();
+  config.hambands ^= data;
   redraw_request|= REDRAW_AREA;
 }
 #endif
@@ -4562,27 +4617,15 @@ __attribute__((noinline)) static void fw_update_ui(const char *fname) {
 
 
 
-static UI_FUNCTION_ADV_CALLBACK(menu_autoname_acb)
+// Toggle the config._mode bit in data
+static UI_FUNCTION_ADV_CALLBACK(menu_config_mode_acb)
 {
   (void)item;
-  (void)data;
   if (b){
-    b->icon = config._mode & _MODE_AUTO_FILENAME ? BUTTON_ICON_CHECK : BUTTON_ICON_NOCHECK;
+    b->icon = config._mode & data ? BUTTON_ICON_CHECK : BUTTON_ICON_NOCHECK;
     return;
   }
-  config._mode^= _MODE_AUTO_FILENAME;
-  config_save();
-}
-
-static UI_FUNCTION_ADV_CALLBACK(menu_mhz_csv_acb)
-{
-  (void)item;
-  (void)data;
-  if (b){
-    b->icon = config._mode & _MODE_MHZ_CSV ? BUTTON_ICON_CHECK : BUTTON_ICON_NOCHECK;
-    return;
-  }
-  config._mode^= _MODE_MHZ_CSV;
+  config._mode^= data;
   config_save();
 }
 
@@ -4728,6 +4771,7 @@ const menuitem_t  menu_lowoutputmode[] = {
 #ifdef TINYSA4
   { MT_FORM | MT_ADV_CALLBACK,  255, "OUTPUT: %s",     menu_lowoutput_settings_acb},
 #endif
+  { MT_FORM | MT_SUBMENU,  0,                   "PRESET",           menu_load_preset},
   { MT_FORM | MT_CANCEL,   0,                   "MODE",             NULL },
   { MT_FORM | MT_NONE, 0, NULL, NULL } // sentinel
 };
@@ -4745,6 +4789,7 @@ const menuitem_t  menu_highoutputmode[] = {
 #ifdef TINYSA4
   { MT_FORM | MT_SUBMENU,  255, S_RARROW" Settings", menu_settings3},
 #endif
+  { MT_FORM | MT_SUBMENU,   0,          "PRESET",           menu_load_preset},
   { MT_FORM | MT_CANCEL,    0,          "MODE",             NULL },
   { MT_FORM | MT_NONE, 0, NULL, NULL } // sentinel
 };
@@ -4816,6 +4861,7 @@ const menuitem_t menu_marker_search[] = {
   { MT_ADV_CALLBACK, 0, "ENTER\n%s",          menu_enter_marker_acb},
   { MT_ADV_CALLBACK, M_TRACKING,    "TRACKING",menu_marker_modify_acb },
 #ifdef TINYSA4
+  { MT_ADV_CALLBACK, _MODE_MARKER_ORDER, "TRACKING\nL"S_RARROW"R", menu_config_mode_acb },
   { MT_ADV_CALLBACK, 0,    "JOG JUMP\nMAX",menu_jog_jump_acb },
   { MT_KEYPAD,   KM_NOISE,      "PEAK\n\b%s",   "2..120 dB"},
 #endif
@@ -5224,7 +5270,8 @@ static const menuitem_t menu_settings[] =
   { MT_CALLBACK,    FMT_BIN_FILE,   "DUMP\nFIRMWARE",       menu_sdcard_cb},
 #endif
 #ifdef __HAM_BAND__
-  { MT_ADV_CALLBACK, 0,         "HAM\nBANDS",         menu_settings_ham_bands},
+  { MT_ADV_CALLBACK, 1,         "HAM\nBANDS",         menu_settings_ham_bands},
+  { MT_ADV_CALLBACK, 2,         "SHOW\nBANDS",        menu_settings_ham_bands},
 #endif
 #ifdef __SD_CARD_LOAD__
   { MT_CALLBACK,    0 ,             "LOAD\nCONFIG.INI",     menu_load_config_cb},
@@ -5398,7 +5445,7 @@ static const menuitem_t menu_config2[] =
  { MT_SUBMENU,          0, "EXPERT\nCONFIG", menu_settings},
 #else
 #ifdef __HAM_BAND__
-  { MT_ADV_CALLBACK, 0,         "HAM\nBANDS",         menu_settings_ham_bands},
+  { MT_ADV_CALLBACK, 1,         "HAM\nBANDS",         menu_settings_ham_bands},
 #endif
  { MT_SUBMENU,          0, "EXPERT\nCONFIG", menu_settings2},
 #endif
@@ -5580,12 +5627,13 @@ static const menuitem_t menu_stimulus[] = {
 static const menuitem_t menu_storage_sd_icon[] = {
   { MT_ADV_CALLBACK, 0,       "SAVE\nCAPTURE",     menu_sd_icon_save_capture_acb },
   { MT_ADV_CALLBACK, 0,       "SAVE\nTRACES",      menu_sd_icon_save_traces_acb },
+  { MT_KEYPAD,       KM_INTERVAL, "REPEAT\n\b%s",  "0 = single save" },
   { MT_NONE,         0,       NULL,                menu_back }
 };
 
-static const menuitem_t menu_storage_config[] = {
-  { MT_ADV_CALLBACK, 0,       "AUTO NAME",              menu_autoname_acb },
-  { MT_ADV_CALLBACK, 0,       "MHz\nCSV",               menu_mhz_csv_acb },
+static const menuitem_t menu_storage_more[] = {
+  { MT_ADV_CALLBACK, _MODE_AUTO_FILENAME, "AUTO NAME",    menu_config_mode_acb },
+  { MT_ADV_CALLBACK, _MODE_MHZ_CSV,       "MHz\nCSV",     menu_config_mode_acb },
   { MT_SUBMENU,      0,       "SD CARD\nICON",          menu_storage_sd_icon },
 #ifdef __USE_USB_MSC__
   { MT_CALLBACK,     0,       "USB\nDISK",              menu_usb_disk_cb },
@@ -5607,7 +5655,7 @@ static const menuitem_t menu_storage[] = {
   { MT_CALLBACK,    FMT_PRS_FILE,   "SAVE\nSETTINGS",       menu_sdcard_cb},
   { MT_CALLBACK,    FMT_CFG_FILE,   "SAVE\nCONFIG",         menu_sdcard_cb},
   { MT_CALLBACK,    FMT_CSV_FILE,   "SAVE\nTRACES",         menu_save_traces_cb},
-  { MT_SUBMENU,     0,              "CONFIG",               menu_storage_config },
+  { MT_SUBMENU,     0,              S_RARROW" MORE",        menu_storage_more },
 //  { MT_KEYPAD,      KM_INTERVAL,    "INTERVAL\n\b%s",       NULL },
   { MT_NONE,    0, NULL, menu_back} // next-> menu_back
 };
@@ -5899,7 +5947,7 @@ static void fetch_numeric_target(uint8_t mode)
     plot_printf(uistat.text, sizeof uistat.text, out_format, uistat.freq_value);
     break;
   case KM_BAND_SPAN:
-    uistat.freq_value = abs((long)setting.bands[active_band].end-(long)setting.bands[active_band].start);
+    uistat.freq_value = setting.bands[active_band].end - setting.bands[active_band].start;
 #ifdef TINYSA4
     if (uistat.freq_value > 990000000UL)
       out_format = "%.6Q";
@@ -6187,28 +6235,21 @@ set_numeric_value(void)
 //    BANDs_update();
     break;
   case KM_BAND_CENTER:
+  case KM_BAND_SPAN:
   {
-    freq_t span = abs((long)setting.bands[active_band].end - (long)setting.bands[active_band].start);
-    freq_t center = uistat.freq_value - (setting.frequency_offset - FREQUENCY_SHIFT);
-    setting.bands[active_band].start = center - span/2;
-    setting.bands[active_band].end = center + span/2;
+    band_t *b = &setting.bands[active_band];
+    freq_t center = (b->end + b->start)/2;
+    freq_t span = b->end - b->start;            // START and STOP keep start <= end
+    if (keypad_mode == KM_BAND_CENTER)
+      center = uistat.freq_value - (setting.frequency_offset - FREQUENCY_SHIFT);
+    else
+      span = uistat.freq_value;
+    b->start = center > span/2 ? center - span/2 : 0;   // unsigned, a new band (0..0) with a span went "below 0 Hz"
+    b->end = b->start + span;
     update_frequencies();
     dirty = true;
     update_grid();
   }
-//    BANDs_update();
-    break;
-  case KM_BAND_SPAN:
-    {
-    freq_t span = uistat.freq_value;
-    freq_t center =  (setting.bands[active_band].end + setting.bands[active_band].start)/2;
-    setting.bands[active_band].start = center - span/2;
-    setting.bands[active_band].end = center + span/2;
-    update_frequencies();
-    dirty = true;
-    update_grid();
-//    BANDs_update();
-    }
     break;
   case KM_BAND_LEVEL:
     setting.bands[active_band].level = to_dBm(uistat.value);
@@ -6467,6 +6508,7 @@ redraw_cal_status:
 #endif
     return;
   }
+  redraw_request |= REDRAW_BATTERY;    // the fill erased it, while paused no completed sweep redraws it
 
     //  if (current_menu_is_form() && !in_selftest)
 //    return;
@@ -6761,6 +6803,22 @@ redraw_cal_status:
   }
 #else // 'tinySA_v1.2-[0-9]*-gxxxxxxx'
   strncpy(buf,&TINYSA_VERSION[8], BLEN+1); // '1.2-...'
+  if (buf[5]=='-' ) { // '1.2-n-g...'
+    if (buf[4]=='0')  // '1.2-0-g...'
+      buf[3] = 0;  // -> '1.2'
+    else {
+      buf[5] = buf[4]; // -> '1.200n'
+      buf[4] = '0';
+      buf[3] = '0';
+    }
+  } else if (buf[6]=='-' ) { // 1.2-nn-g...
+    buf[3] = '0'; // -> '1.20nn'
+  } else { // 1.2-345-g... (or 1.2-3456...)
+    buf[3] = buf[4]; // -> '1.2345'
+    buf[4] = buf[5];
+    buf[5] = buf[6];
+  }
+  buf[6] = 0;
 #endif
   ili9341_drawstring(buf, x, y);
 
@@ -6846,9 +6904,11 @@ static const menuitem_t *menu_next_item(const menuitem_t *m, int *sub_item){
 }
 
 static const menuitem_t *current_menu_item(int i, int *sub_item){
+  if (i < 0)
+    return NULL;
   *sub_item = 0;
   const menuitem_t * m = menu_stack[menu_current_level];
-  while (i--) m = menu_next_item(m,sub_item);
+  while (i-- && m != NULL) m = menu_next_item(m,sub_item);
   return m;
 }
 
@@ -7128,15 +7188,47 @@ draw_numeric_input(const char *buf)
   }
 }
 
+#define TXT_INPUT_X     (14 + 10 * FONT_WIDTH)
+#define TXT_CURSOR_OUT  4           // the cursor sticks out above and below the letters, so it is no I
+
+static uint8_t kp_cursor;   // text keypad: characters are inserted and deleted here
+
+// Text with the cursor as a blue 2 pixel bar in its own gap (the glyphs are only 1 pixel apart)
 static void
 draw_text_input(const char *buf)
 {
   ili9341_set_foreground(LCD_INPUT_TEXT_COLOR);
   ili9341_set_background(LCD_INPUT_BG_COLOR);
-  uint16_t x = 14 + 10 * FONT_WIDTH;
+  int x = TXT_INPUT_X;
   uint16_t y = LCD_HEIGHT-(wFONT_GET_HEIGHT + NUM_INPUT_HEIGHT)/2;
-  ili9341_fill(x, y, wFONT_MAX_WIDTH * 20, wFONT_GET_HEIGHT);
-  ili9341_drawstring_10x14(buf, x, y);
+  ili9341_fill(x, y - TXT_CURSOR_OUT, LCD_WIDTH - x, wFONT_GET_HEIGHT + 2 * TXT_CURSOR_OUT);
+  char txt[2] = {0, 0};
+  for (int i = 0; ; i++) {
+    if (i == kp_cursor) {
+      ili9341_set_background(LCD_BRIGHT_COLOR_BLUE);
+      ili9341_fill(x, y - TXT_CURSOR_OUT, 2, wFONT_GET_HEIGHT + 2 * TXT_CURSOR_OUT);
+      ili9341_set_background(LCD_INPUT_BG_COLOR);
+      x += 3;
+    }
+    if ((txt[0] = buf[i]) == 0) break;
+    ili9341_drawstring_10x14(txt, x, y);
+    x += wFONT_GET_WIDTH(txt[0]);
+  }
+}
+
+// Touch on the text: the cursor goes to the character boundary nearest to touch_x
+static void
+text_cursor_touch(int touch_x)
+{
+  int x = TXT_INPUT_X, i;
+  for (i = 0; kp_buf[i]; i++) {
+    int w = wFONT_GET_WIDTH(kp_buf[i]);
+    if (touch_x < x + w / 2) break;
+    x += w;
+  }
+  if (i == kp_cursor) return;
+  kp_cursor = i;
+  draw_text_input(kp_buf);
 }
 
 static void
@@ -7360,6 +7452,11 @@ draw_menu_buttons(const menuitem_t *menu, uint32_t mask)
 #else
       ili9341_drawstring(text, text_offs, y+(button_height-linesFONT_GET_HEIGHT)/2);
 #endif
+      if (MT_MASK(m->type) == MT_SUBMENU) {   // Opens a submenu: small arrow in the top right corner
+        ili9341_set_background(LCD_MENU_TEXT_COLOR);
+        for (int r = -2; r <= 2; r++)
+          ili9341_fill(LCD_WIDTH - 6, y + 4 + r, 3 - (r < 0 ? -r : r), 1);
+      }
     }
   }
   // Cleanup other buttons (less flicker)
@@ -7757,6 +7854,23 @@ lever_search_marker(int status)
   } while (status != 0);
 }
 
+#if 0
+void lever_trigger(int status) {
+  static uint16_t lever_band = 0;
+  float *level = &setting.trigger_level;
+#ifdef __BANDS__
+  if (is_multiband_trigger()) level = &setting.bands[lever_band].level;
+#endif
+  do {
+    if (status & EVT_DOWN) *level+= 0.5f;
+    if (status & EVT_UP  ) *level-= 0.5f;
+    redraw_trigger(lever_band);
+    lcd_printf(180, 312, "%02x %.2f %.2f",  lever_band, setting.bands[lever_band].level, setting.trigger_level);
+    status = btn_wait_release();
+  } while (status != 0);
+}
+#endif
+
 // ex. 10942 -> 10000
 //      6791 ->  5000
 //       341 ->   200
@@ -7848,6 +7962,7 @@ ui_process_normal_lever(void)
         else
           lever_move(status, FREQ_IS_STARTSTOP() ? ST_STOP : ST_SPAN);
         break;
+//    case LM_TRIGGER: lever_trigger(status); break;
       }
     }
   }
@@ -7995,15 +8110,21 @@ full_keypad_click(int c, int kp_index)
     set_numeric_value();            // Also for text values
     return KP_DONE;
   }
-  if (c == S_LARROW[0]) { // Backspace
+  if (kp_cursor > kp_index)         // kp_buf replaced by the text command
+    kp_cursor = kp_index;
+  if (c == S_LARROW[0]) { // Backspace: the character before the cursor
     if (kp_index == 0)
       return KP_CANCEL;
     if (keypad_long_press)          // long press erases the whole input, stay in the keypad
-      kp_index = 0;
-    else
-      --kp_index;
-  } else if (kp_index < TXTINPUT_LEN) { // any other text input
-    kp_buf[kp_index++] = c;
+      kp_index = kp_cursor = 0;
+    else if (kp_cursor > 0) {
+      memmove(&kp_buf[kp_cursor - 1], &kp_buf[kp_cursor], kp_index - kp_cursor);
+      kp_cursor--, kp_index--;
+    }
+  } else if (kp_index < TXTINPUT_LEN) { // any other text input, inserted at the cursor
+    memmove(&kp_buf[kp_cursor + 1], &kp_buf[kp_cursor], kp_index - kp_cursor);
+    kp_buf[kp_cursor++] = c;
+    kp_index++;
   }
   kp_buf[kp_index] = '\0';
   draw_text_input(kp_buf);
@@ -8014,7 +8135,7 @@ static int
 keypad_click(int key) {
   int c = keypads[key+1].c;  // !!! Use key + 1 (zero key index used or size define)
   int index = strlen(kp_buf);
-  int result = keypads[0].c == NUM_KEYBOARD ? num_keypad_click(c, index) : full_keypad_click(c, index);
+  int result = IS_TXT_KEYBOARD ? full_keypad_click(c, index) : num_keypad_click(c, index);
   return result;
 }
 
@@ -8023,6 +8144,13 @@ keypad_apply_touch(void)
 {
   int touch_x, touch_y;
   touch_position(&touch_x, &touch_y);
+  if (IS_TXT_KEYBOARD && touch_y >= LCD_HEIGHT - NUM_INPUT_HEIGHT) {
+    do {                            // touch on the text moves the cursor, follow the finger
+      touch_position(&touch_x, &touch_y);
+      text_cursor_touch(touch_x);
+    } while (touch_check() != EVT_TOUCH_RELEASED);
+    return -1;
+  }
   const keypad_pos_t *p = &key_pos[keypads[0].c];
   if (touch_x < p->x_offs || touch_y < p->y_offs) return -1;
   // Calculate key position from touch x and y
@@ -8046,6 +8174,7 @@ keypad_apply_touch(void)
 
 extern uint8_t in_menu_command;
 extern uint8_t remote_text;
+extern uint8_t keypad_open;
 
 static void
 ui_process_keypad(void)
@@ -8059,13 +8188,15 @@ ui_process_keypad(void)
   keypad_long_press = false;
   if (!preset_text)
     kp_buf[0] = 0;
+  kp_cursor = strlen(kp_buf);
   if (in_menu_command) return;
   if (preset_text) {                          // show the default, ENTER accepts it as is
-    if (keypads[0].c == NUM_KEYBOARD)
-      draw_numeric_input(kp_buf);
-    else
+    if (IS_TXT_KEYBOARD)
       draw_text_input(kp_buf);
+    else
+      draw_numeric_input(kp_buf);
   }
+  keypad_open = true;                         // shell commands for the sweep thread are refused now
   while (TRUE) {
     status = btn_check();
     if (status & (EVT_UP|EVT_DOWN)) {
@@ -8099,6 +8230,7 @@ ui_process_keypad(void)
       break;
     }
   }
+  keypad_open = false;
   kp_help_text = NULL;
   redraw_frame();
   if (current_menu_is_form()) {
@@ -8194,6 +8326,24 @@ touch_pickup_marker(int touch_x, int touch_y)
   return TRUE;
 }
 
+static int touch_pickup_trigger(int touch_x, int touch_y) {
+  touch_x -= OFFSETX;
+  touch_y -= OFFSETY;
+
+  int band = search_nearest_trigger(touch_x, touch_y);
+  if (band < 0) return FALSE;
+  float *level = &setting.trigger_level;
+#ifdef __BANDS__
+  if (is_multiband_trigger()) level = &setting.bands[band].level;
+#endif
+  do { // wait touch release
+    touch_position(&touch_x, &touch_y);
+    *level = pos_to_trigger_value(touch_y - OFFSETY);
+    redraw_trigger(band);
+  } while (touch_check()!= EVT_TOUCH_RELEASED);
+  return TRUE;
+}
+
 static int touch_quick_menu(int touch_x, int touch_y)
 {
   if (touch_x <OFFSETX)
@@ -8231,7 +8381,7 @@ static void sa_save_file(uint8_t format) {
 #endif
 
   // Prepare filename and open for write
-  if (config._mode & _MODE_AUTO_FILENAME) {   // Auto name, use date / time
+  if ((config._mode & _MODE_AUTO_FILENAME) || sd_repeat) {   // Auto name, use date / time
 #if FF_USE_LFN >= 1
     uint32_t tr = rtc_get_tr_bcd(); // TR read first
     uint32_t dr = rtc_get_dr_bcd(); // DR read second
@@ -8306,8 +8456,8 @@ static void sa_save_file(uint8_t format) {
               buf += plot_printf(buf, 100, "%U,", getFrequency(i));
           }
           if (file_mask & 2)  buf += plot_printf(buf, 100, "%.3f", value(measured[TRACE_ACTUAL][i]));
-          if (file_mask & 4)  buf += plot_printf(buf, 100, " %.3f ", value(measured[TRACE_STORED][i]));
-          if (file_mask & 8)  buf += plot_printf(buf, 100, " %.3f ", value(measured[TRACE_STORED2][i]));
+          if (file_mask & 4)  buf += plot_printf(buf, 100, " %.3f", value(measured[TRACE_STORED][i]));
+          if (file_mask & 8)  buf += plot_printf(buf, 100, " %.3f", value(measured[TRACE_STORED2][i]));
           if (file_mask & 16) buf += plot_printf(buf, 100, " %.3f", value(measured[TRACE_TEMP][i]));
           buf += plot_printf(buf, 100, "\r\n");
           res = f_write(fs_file, (char *)spi_buffer, buf - (char *)spi_buffer, &size);
@@ -8331,8 +8481,7 @@ static void sa_save_file(uint8_t format) {
             char *buf = (char *)spi_buffer;
             buf += plot_printf(buf, 100, "%U, ", setting.bands[i].start);
             buf += plot_printf(buf, 100, "%U, ", setting.bands[i].end);
-            buf += plot_printf(buf, 100, "%f ", setting.bands[i].level);
-            buf += plot_printf(buf, 100, "\r\n");
+            buf += plot_printf(buf, 100, "%f, \"%s\"\r\n", setting.bands[i].level, setting.bands[i].name);  // name: older firmware ignores it
             res = f_write(fs_file, (char *)spi_buffer, buf - (char *)spi_buffer, &size);
           }
         }
@@ -8402,6 +8551,17 @@ void save_csv(uint8_t mask) {
   menu_sdcard_cb(0, FMT_CSV_FILE);
 }
 
+bool sd_repeat;                     // SD icon saves every setting.interval seconds
+static systime_t sd_repeat_start;
+
+static void sd_icon_save(void) {
+  sd_repeat_start = chVTGetSystemTimeX();
+  if (config.sd_icon_save & SDIS_CAPTURE)
+    menu_sdcard_cb(0, FMT_BMP_FILE);
+  if (config.sd_icon_save & SDIS_TRACES)
+    menu_save_traces_cb(0, 0);
+}
+
 static bool
 made_screenshot(int touch_x, int touch_y) {
   if (touch_y < SD_CARD_START || touch_y > SD_CARD_START + 20 || touch_x > OFFSETX)
@@ -8409,10 +8569,12 @@ made_screenshot(int touch_x, int touch_y) {
   ili9341_set_background(LCD_BG_COLOR);
   ili9341_fill(4, SD_CARD_START, 16, 16);
   touch_wait_release();
-  if (config.sd_icon_save & SDIS_CAPTURE)
-    menu_sdcard_cb(0, FMT_BMP_FILE);
-  if (config.sd_icon_save & SDIS_TRACES)
-    menu_save_traces_cb(0, 0);
+  if (setting.interval) {               // Repeat set: the icon starts and stops saving every interval
+    sd_repeat = !sd_repeat;
+    redraw_request |= REDRAW_BATTERY;   // icon color
+    if (!sd_repeat) return TRUE;
+  }
+  sd_icon_save();
   return TRUE;
 }
 #endif
@@ -8540,6 +8702,9 @@ void ui_process_touch(void)
       // Try drag marker
       if (touch_pickup_marker(touch_x, touch_y))
         break;
+      // Try drag trigger line
+      if (touch_pickup_trigger(touch_x, touch_y))
+        break;
       if (touch_marker_select(touch_x, touch_y))
         break;
       // Try select lever mode (top and bottom screen)
@@ -8569,36 +8734,14 @@ void ui_process_touch(void)
 
 static uint16_t previous_button_state = 0;
 
-#ifdef TINYSA4
-uint64_t time_since_start = 0;
-uint64_t interval_stop_time = 0;
-
-systime_t old_ticks;
-void set_interval_stop_time(void)
-{
-  if (setting.interval == 0) {
-    interval_stop_time = 0;
-  } else {
-    interval_stop_time = time_since_start + CH_CFG_ST_FREQUENCY * (uint64_t)setting.interval;
-  }
-}
-#endif
-
-
 void
 ui_process(void)
 {
-#ifdef TINYSA4
-  systime_t ticks = chVTGetSystemTimeX();
-  if (ticks < old_ticks)
-    time_since_start += 0x100000000;
-  old_ticks = ticks;
-  time_since_start = (time_since_start & 0xffffffff00000000) | ticks;
-
-  if (interval_stop_time != 0 && interval_stop_time < time_since_start) {
-    set_interval_stop_time();
-  }
-
+#ifdef __USE_SD_CARD__
+  // SD icon repeat, only from the normal screen: a capture would close an open menu
+  if (sd_repeat && setting.interval && ui_mode == UI_NORMAL &&
+      chVTGetSystemTimeX() - sd_repeat_start >= (systime_t)setting.interval * CH_CFG_ST_FREQUENCY)
+    sd_icon_save();
 #endif
 
   int button_state = READ_PORT() & BUTTON_MASK;
@@ -8606,14 +8749,20 @@ ui_process(void)
     selection = -1; // hide keyboard mode selection
     ui_mode_menu();
   }
+  // Clear only the handled request: the shell may have set OP_CONSOLE meanwhile for a
+  // waiting command, without it an output mode sweep never stops to run that command
   if ((operation_requested&OP_LEVER) || previous_button_state != button_state) {
     ui_process_lever();
     previous_button_state = button_state;
-    operation_requested = OP_NONE;
+    chSysLock();
+    operation_requested &= ~OP_LEVER;
+    chSysUnlock();
   }
   if (operation_requested&OP_TOUCH) {
     ui_process_touch();
-    operation_requested = OP_NONE;
+    chSysLock();
+    operation_requested &= ~OP_TOUCH;
+    chSysUnlock();
   }
   touch_start_watchdog();
 }

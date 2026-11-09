@@ -4,7 +4,7 @@ static uint16_t current_page;
 static uint16_t sel_mode;
 
 // Buttons in browser
-enum {FILE_BUTTON_LEFT = 0, FILE_BUTTON_RIGHT, FILE_BUTTON_EXIT, FILE_BUTTON_DEL, FILE_BUTTON_FILE};
+enum {FILE_BUTTON_LEFT = 0, FILE_BUTTON_RIGHT, FILE_BUTTON_EXIT, FILE_BUTTON_DEL, FILE_BUTTON_REN, FILE_BUTTON_FILE};
 // Button position on screen
 typedef struct  {
   uint16_t x;
@@ -14,10 +14,11 @@ typedef struct  {
   uint8_t  ofs;
 } browser_btn_t;
 static const browser_btn_t browser_btn[] = {
-  [FILE_BUTTON_LEFT] = {         0  + 40, LCD_HEIGHT - FILE_BOTTOM_HEIGHT, LCD_WIDTH/2 - 80, FILE_BOTTOM_HEIGHT, (LCD_WIDTH/2 - 80 - FONT_WIDTH)/2}, // < previous
+  [FILE_BUTTON_LEFT] = {         0  + 80, LCD_HEIGHT - FILE_BOTTOM_HEIGHT, LCD_WIDTH/2 -120, FILE_BOTTOM_HEIGHT, (LCD_WIDTH/2 -120 - FONT_WIDTH)/2}, // < previous
   [FILE_BUTTON_RIGHT]= {LCD_WIDTH/2 + 40, LCD_HEIGHT - FILE_BOTTOM_HEIGHT, LCD_WIDTH/2 - 80, FILE_BOTTOM_HEIGHT, (LCD_WIDTH/2 - 80 - FONT_WIDTH)/2}, // > next
   [FILE_BUTTON_EXIT] = {LCD_WIDTH   - 40, LCD_HEIGHT - FILE_BOTTOM_HEIGHT,               40, FILE_BOTTOM_HEIGHT, (              40 - FONT_WIDTH)/2}, // X exit
   [FILE_BUTTON_DEL]  = {         0  +  0, LCD_HEIGHT - FILE_BOTTOM_HEIGHT,               40, FILE_BOTTOM_HEIGHT, (            40 - 3*FONT_WIDTH)/2}, // DEL
+  [FILE_BUTTON_REN]  = {         0  + 40, LCD_HEIGHT - FILE_BOTTOM_HEIGHT,               40, FILE_BOTTOM_HEIGHT, (            40 - 3*FONT_WIDTH)/2}, // REN
   // File button, only size and start position, must be idx = FILE_BUTTON_FILE
   [FILE_BUTTON_FILE] = {               0,                               0, LCD_WIDTH/FILES_COLUMNS, FILE_BUTTON_HEIGHT,                          5},
 };
@@ -45,8 +46,8 @@ static void browser_draw_button(int idx, const char *txt) {
   ui_button_t b;
   browser_btn_t btn;
   browser_get_button_pos(idx, &btn);
-  // Mark DEL button in file delete mode
-  b.bg = (idx == FILE_BUTTON_DEL && sel_mode) ? LCD_LOW_BAT_COLOR : LCD_MENU_COLOR;
+  // Mark DEL button in file delete mode, REN in rename mode
+  b.bg = (sel_mode && idx == FILE_BUTTON_DEL - 1 + sel_mode) ? LCD_LOW_BAT_COLOR : LCD_MENU_COLOR;
   b.fg = LCD_MENU_TEXT_COLOR;
   b.border = (idx == selection) ? BROWSER_BUTTON_BORDER|BUTTON_BORDER_FALLING : BROWSER_BUTTON_BORDER|BUTTON_BORDER_RISE;
   if (txt == NULL) b.border|= BUTTON_BORDER_NO_FILL;
@@ -103,7 +104,22 @@ repeat:
   if (cnt != 0) return;
 
   // Delete file if in delete mode
-  if (sel_mode) {f_unlink(fno.fname); return;}
+  if (sel_mode == 1) {f_unlink(fno.fname); return;}
+  // Rename mode: edit the name without extension in the text keypad
+  if (sel_mode == 2) {
+    int format = keypad_mode;
+    ui_preset_keypad_text(fno.fname, strlen(fno.fname) - strlen(file_ext[format]) - 1);
+    ui_mode_keypad(KM_FILENAME);
+    if (kp_buf[0]) {
+      char new_name[FF_LFN_BUF];
+      plot_printf(new_name, FF_LFN_BUF, "%s.%s", kp_buf, file_ext[format]);
+      f_rename(fno.fname, new_name);
+    }
+    ui_mode = UI_BROWSER;   // the keypad left to the normal screen
+    area_width = area_height = 0;
+    keypad_mode = format;
+    return;
+  }
 run_file:
   {}
   const char *error = NULL;
@@ -177,11 +193,13 @@ finish2:
           line[j] = 0; j = 0;
           char *args[16];
           int nargs = parse_line(line, args, 16);                            // Parse line to 16 args
-          if (nargs < 2 || args[0][0] == '#' || args[0][0] == '!') continue; // No data or comment or settings
+          if (nargs < 3 || args[0][0] == '#' || args[0][0] == '!') continue; // No data or comment or settings
           if (count >= BANDS_MAX) {error = "Format err"; goto finish3;}
           setting.bands[count].start = my_atoui(args[0]);// Get frequency
           setting.bands[count].end = my_atoui(args[1]);// Get frequency
           setting.bands[count].level = my_atof(args[2]);     // Get frequency
+          if (nargs > 3)                                     // Name, files of older firmware have none
+            plot_printf(setting.bands[count].name, BAND_NAME_SIZE, "%s", args[3]);
           setting.bands[count].enabled = true;               // Get frequency
           count++;
         }
@@ -219,6 +237,8 @@ finish3:
           char *args[16];
           int nargs = parse_line(line, args, 16);                            // Parse line to 16 args
           if (nargs < 2 || args[0][0] == '#' || args[0][0] == '!') continue; // No data or comment or settings
+          if (strchr(args[0], '.'))                                          // MHz (CONFIG MHz CSV), Hz has no decimals
+            args[0][strlen(args[0])] = 'M';                                  // suffix so my_atoui returns Hz
           f = my_atoui(args[0]);                                             // Get frequency
           if (count >= POINTS_COUNT || f > maxFreq) {error = "Format err"; goto finish;}
           if (count == 0)  {
@@ -290,6 +310,9 @@ static char cmd_buffer[256+128];
     uint16_t *buf_16 = spi_buffer; // prepare buffer
     res = f_read(fs_file, (void *)buf_16, sizeof(bmp_header_v4), &size); // read heaser
     if (res != FR_OK || buf_16[9] != LCD_WIDTH || buf_16[11] != LCD_HEIGHT || buf_16[14] != 16) {error = "Format err"; break;}
+#ifdef __CAPTURE_RLE8__
+    capture_verify = true;   // the image can hold any colour
+#endif
     for (y = LCD_HEIGHT-1; y >=0 && res == FR_OK; y--) {
       res = f_read(fs_file, (void *)buf_16, LCD_WIDTH * sizeof(uint16_t), &size);
       swap_bytes(buf_16, LCD_WIDTH);
@@ -326,15 +349,16 @@ static char cmd_buffer[256+128];
         magic == SETTING_MAGIC && f_read(fs_file, src, total, &size) == FR_OK) {
 
      // TODO remove code duplication with flash.c
+      memset(setting.normalized, 0, sizeof setting.normalized);     // the normalize reference trace is not in a preset
+      setting.normalized_trace = -1;
       update_min_max_freq();
       update_frequencies();
       set_scale(setting.scale);
       set_reflevel(setting.reflevel);
       set_level_meter_or_waterfall();
-#ifdef __SD_FILE_BROWSER__
+      update_rbw();                     // as caldata_recall(), else the RBW of the loaded preset is not used
       // Remember where this preset came from so storing it back can default to it
       plot_printf(sd_preset_path, sizeof(sd_preset_path), "%s", fno.fname);
-#endif
     }
     else error = "Format err";
   }
@@ -393,6 +417,7 @@ static char cmd_buffer[256+128];
 
 static void browser_draw_buttons(void) {
   browser_draw_button(FILE_BUTTON_DEL, "DEL");
+  browser_draw_button(FILE_BUTTON_REN, "REN");
   browser_draw_button(FILE_BUTTON_LEFT,  "<");
   browser_draw_button(FILE_BUTTON_RIGHT, ">");
   browser_draw_button(FILE_BUTTON_EXIT,  "X");
@@ -454,13 +479,22 @@ static void browser_key_press(int key) {
     case FILE_BUTTON_EXIT:  //Exit
       ui_mode_normal();
     break;
-    case FILE_BUTTON_DEL:   // Toggle delete mode
-      sel_mode^= 1;
+    case FILE_BUTTON_DEL:   // Toggle delete mode (1) or rename mode (2)
+    case FILE_BUTTON_REN:
+      key = key - FILE_BUTTON_DEL + 1;
+      sel_mode = sel_mode == key ? 0 : key;
       browser_draw_buttons();
     break;
     case FILE_BUTTON_FILE:  // Open or delete file
     default:
+    {
+      int old_mode = setting.mode;
       browser_open_file(key - FILE_BUTTON_FILE + (current_page - 1) * FILES_PER_PAGE);
+      if (!sel_mode && keypad_mode == FMT_PRS_FILE) {
+        menu_preset_loaded(old_mode);
+        return;
+      }
+    }
       if (sel_mode) {
         file_count = 0;     // Reeset file count (recalculate on draw page)
         selection = -1;     // Reset delection

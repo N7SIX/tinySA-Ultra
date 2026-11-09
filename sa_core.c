@@ -71,7 +71,7 @@ freq_t frequency_step_x10 = 0;
 uint16_t vbwSteps = 1;
 freq_t minFreq = 0;
 freq_t maxFreq = 520000000;
-static float prev_output_level_dBm = -150;  // cached output level to reduce redundant hardware writes
+static float prev_output_level_dBm = MIN_RSSI_VALUE;  // cached output level to reduce redundant hardware writes
 int spur_gate = 100;
 
 #ifdef __BANDS__
@@ -277,7 +277,9 @@ void set_output_path(freq_t f, float level)
     switch_atten = 31.0;
 #endif
   float a = level - level_max();                 // convert to all settings maximum power output equals a = zero
-  if (a < -switch_atten + BELOW_MAX_DRIVE(0)) {           // Switch needed
+  // Switch needed. AM: switch as soon as possible, else just above the threshold the attenuator is near
+  // its maximum and has no room left for the modulation troughs
+  if (a < -switch_atten + (setting.modulation == MO_AM ? 0 : BELOW_MAX_DRIVE(0))) {
     a = a + switch_atten;
     setting.atten_step = true;
   } else
@@ -308,7 +310,8 @@ void set_output_path(freq_t f, float level)
   int ar = 31 - ATTENUATION_RESERVE;
   if (setting.modulation == MO_AM) // reserve attenuator range for AM modulation
     ar = 6;
-  while (a + ar < blw && d > LOWEST_LEVEL) { // reduce till it fits attenuator ((ar+ATTENUATION_RESERVE) ..  ATTENUATION_RESERVE)
+  while (a + ar < blw && d > LOWEST_LEVEL   // reduce till it fits attenuator ((ar+ATTENUATION_RESERVE) ..  ATTENUATION_RESERVE)
+         && (setting.modulation != MO_AM || BELOW_MAX_DRIVE(d-1) >= a)) { // AM: a drive step larger than ar must not use the reserve for the peaks
     d--;
     blw =  BELOW_MAX_DRIVE(d);
   }
@@ -713,7 +716,7 @@ void reset_settings(int m)
   setting.trigger_mode = T_MID;
   setting.fast_speedup = 0;
   setting.faster_speedup = 0;
-  setting.trigger_level = -150.0;
+    setting.trigger_level = MIN_RSSI_VALUE;
 #ifdef __TRIGGER_TRACE__
   setting.trigger_trace = 255;
 #endif
@@ -933,7 +936,7 @@ void set_measurement(int m)
   setting.stored[TRACE_STORED] = true;
   if (m == M_LINEARITY) {
     for (int j = 0; j < setting._sweep_points; j++)
-      stored_t[j] = -150;
+      stored_t[j] = MIN_RSSI_VALUE;
     setting.linearity_step = 0;
     setting.attenuate_x2 = 29*2;
     setting.auto_attenuation = false;
@@ -1109,12 +1112,6 @@ void toggle_mirror_masking(void)
 void toggle_mute(void)
 {
   setting.mute = !setting.mute;
-  dirty = true;
-}
-
-void toggle_hambands(void)
-{
-  config.hambands = !config.hambands;
   dirty = true;
 }
 
@@ -2057,7 +2054,7 @@ void set_trigger_level(float trigger_level)
 #ifdef  __TRIGGER_TRACE__
   setting.trigger_trace = 255;
 #endif
-  redraw_request |= REDRAW_TRIGGER | REDRAW_CAL_STATUS | REDRAW_AREA;
+  redraw_request |= REDRAW_TRIGGER | REDRAW_CAL_STATUS;
   //dirty = true;             // No HW update required, only status panel refresh
 }
 
@@ -2069,7 +2066,6 @@ void set_trigger(int trigger)
     setting.trigger_direction = trigger;
   } else if (trigger == T_DONE) {
     pause_sweep();                    // Trigger once so pause after this sweep has completed!!!!!!!
-    redraw_request |= REDRAW_CAL_STATUS;        // Show status change    setting.trigger = trigger;
     setting.trigger = trigger;
   } else {
     sweep_mode = SWEEP_ENABLE;
@@ -3421,7 +3417,7 @@ int avoid_spur(freq_t f)                   // find if this frequency should be a
 
 static uint16_t max_index[MAX_MAX];
 static uint16_t cur_max = 0;
-float temppeakLevel = -150;
+float temppeakLevel = MIN_RSSI_VALUE;
 int16_t downslope = true;
 int peak_finding_index;
 float peak_finding_level;
@@ -3500,6 +3496,21 @@ static int modulation_steps = 8;
 
 // Max = 10000 / 28.8
 static const int sine_wave[MAX_MODULATION_STEPS/4+1] = {0,    17,     34,     51,     68,     84,     101,    117,    133,    148,    164,    179,    193,    207,    220,    233,    246,    257,    268,    279,    289,    298,    306,    314,    321,    327,    332,    337,    341,    343,    346,    347,    347 };
+
+// sine_wave[] (+-347) at phase p in 1/(MAX_MODULATION_STEPS*256) of a period, linear interpolation
+static int sine347(uint32_t p)
+{
+  p &= MAX_MODULATION_STEPS*256 - 1;
+  int neg = p >= MAX_MODULATION_STEPS/2*256;
+  if (neg) p -= MAX_MODULATION_STEPS/2*256;
+  if (p > MAX_MODULATION_STEPS/4*256) p = MAX_MODULATION_STEPS/2*256 - p;
+  int i = p >> 8;
+  int v = sine_wave[i];
+  if (i < MAX_MODULATION_STEPS/4)
+    v += ((sine_wave[i+1] - v) * (int)(p & 255)) >> 8;
+  return neg ? -v : v;
+}
+#define MAX_FM_STEP_RATE    12000   // Si4468 offset updates per second for FM, faster makes the output crackle
 //
 //  Offset is 14.4Hz when below 600MHz and 28.8 when above.
 //
@@ -3675,7 +3686,7 @@ pureRSSI_t perform(bool break_on_operation, int i, freq_t f, int tracking)     /
     set_calibration_freq(setting.refer);
     update_rbw();
     calculate_step_delay();
-    prev_output_level_dBm = -150;                               // clear cached level setting
+    prev_output_level_dBm = MIN_RSSI_VALUE;                     // clear cached level setting
     // Initialize HW
     scandirty = true;                                                       // This is the first pass with new settings
     for (int t=0;t<TRACES_MAX;t++)
@@ -3746,43 +3757,20 @@ pureRSSI_t perform(bool break_on_operation, int i, freq_t f, int tracking)     /
         }
       }
       if (setting.modulation == MO_WFM) {
-        int sine_wave_index = 1;
         config.cor_am = INITIAL_MODULATION_CORRECTION;        // Initialize with some spare
-        modulation_steps = MAX_MODULATION_STEPS; // Search modulation steps that fit frequency
-        //modulation_steps = 8;  // <-----------------TEMP!!!!!
-        while ( ((modulation_delay = ((float)8000000/ modulation_steps ) / setting.modulation_frequency + config.cor_am)) < 900 && modulation_steps >= 4) {
-          sine_wave_index <<= 1;
-          modulation_steps >>= 1;
-        }
-        if (modulation_steps >= 4) {
-          int hn = (config.wfm_1khz_harmonic > 0 && setting.modulation_frequency < MAX_CTCSS_FREQ) ? (int)((1000.0 / setting.modulation_frequency) + 0.5) : 0;
-          int local_deviation = setting.modulation_deviation_div100;
+        modulation_steps = MAX_FM_STEP_RATE / setting.modulation_frequency;   // any count, not only powers of 2
+        if (modulation_steps > MAX_MODULATION_STEPS) modulation_steps = MAX_MODULATION_STEPS;
+        if (modulation_steps < 2) modulation_steps = 2;
+        int hn = (config.wfm_1khz_harmonic > 0 && setting.modulation_frequency < MAX_CTCSS_FREQ) ? (int)((1000.0 / setting.modulation_frequency) + 0.5) : 0;
+        int local_deviation = setting.modulation_deviation_div100;
+        if (hn)
+          local_deviation /= 7;                   // 15% CTCSS deviation
+        for (int i = 0; i < modulation_steps; i++) {
+          uint32_t p = (2*i+1) * (MAX_MODULATION_STEPS*256/2) / modulation_steps;    // middle of the step: 2 steps give +-deviation
+          int v = local_deviation * sine347(p) / 100;
           if (hn)
-            local_deviation /= 7;                   // 15% CTCSS deviation
-          for (int i = 0; i < modulation_steps/4+1; i++) {
-            fm_modulation[i] = local_deviation * sine_wave[i*sine_wave_index]/100;
-            fm_modulation[modulation_steps/2 - i] = fm_modulation[i];
-            fm_modulation[modulation_steps/2 + i] = -fm_modulation[i];
-            fm_modulation[modulation_steps - i] = -fm_modulation[i];
-          }
-          if (hn) {
-            for (int i = 0; i < modulation_steps; i++) {
-              int table_index = (i*sine_wave_index*hn) % MAX_MODULATION_STEPS;
-              int mul = 1;
-              if (table_index > MAX_MODULATION_STEPS/2) {
-                mul = -1;
-                table_index = MAX_MODULATION_STEPS - table_index;
-              }
-              if (table_index > MAX_MODULATION_STEPS/4)
-                table_index = MAX_MODULATION_STEPS/2 - table_index;
-              int v = setting.modulation_deviation_div100 * sine_wave[table_index] * mul / 100;
-              fm_modulation[i] += v;
-            }
-          }
-        } else {
-          modulation_steps = 2;
-          fm_modulation[0] = (setting.modulation_deviation_div100*347)/100;
-          fm_modulation[1] = -fm_modulation[0];
+            v += setting.modulation_deviation_div100 * sine347(p * hn) / 100;   // approximate 1 kHz tone
+          fm_modulation[i] = v;
         }
       }
 #else
@@ -4104,7 +4092,7 @@ modulation_again:
       my_veryfast_delay(modulation_delay);
   }
     // -------------------------------- Acquisition loop for one requested frequency covering spur avoidance and vbwsteps ------------------------
-  pureRSSI_t RSSI = float_TO_PURE_RSSI(-150);
+  pureRSSI_t RSSI = float_TO_PURE_RSSI(MIN_RSSI_VALUE);
   if (debug_avoid){                 // For debugging the spur avoidance control
 	stored_t[i] = -90.0;                                  // Display when to do spur shift in the stored trace
   }
@@ -5073,12 +5061,11 @@ void reset_band(void) {
 static bool sweep(bool break_on_operation)
 {
   float RSSI;
-//  float local_peakLevel = -150.0;
-//  int local_peakIndex = 0;
+//  float local_peakLevel = MIN_RSSI_VALUE;
 #ifdef __SI4432__
   freq_t agc_peak_freq = 0;
-  float agc_peak_rssi = -150;
-  float agc_prev_rssi = -150;
+  float agc_peak_rssi = MIN_RSSI_VALUE;
+  float agc_prev_rssi = MIN_RSSI_VALUE;
   int last_AGC_value = 0;
   uint8_t last_AGC_direction_up = false;
   int AGC_flip_count = 0;
@@ -5277,7 +5264,7 @@ static bool sweep(bool break_on_operation)
         agc_peak_rssi = agc_prev_rssi = local_rssi;
       }
       if (local_rssi < AGC_RSSI_THRESHOLD)
-        agc_prev_rssi = -150;
+        agc_prev_rssi = MIN_RSSI_VALUE;
       freq_t delta_freq = current_freq - agc_peak_freq;
       if (agc_peak_freq != 0 &&  delta_freq < 2000000) {
         int max_gain = (-25 - agc_peak_rssi ) / 4;
@@ -5359,7 +5346,7 @@ static bool sweep(bool break_on_operation)
           m = temp_t[i];
         real[i] = 0;
         imag[i] = 0;
-        actual_t[i] = -150;
+        actual_t[i] = MIN_RSSI_VALUE;
       }
       for (int i=0;i<sweep_points;i++) {
         real[i] = temp_t[i] - m;
@@ -5430,7 +5417,7 @@ static bool sweep(bool break_on_operation)
         imag[i] = 0;
         real2[0] = 0.000000000001;
         imag2[i] = 0;
-        actual_t[i] = -150;
+        actual_t[i] = MIN_RSSI_VALUE;
       }
       for (int i=0;i<sweep_points;i++) {
         if (temp_t[i] > m+25)
@@ -5615,8 +5602,8 @@ static volatile int dummy;
 #endif
         break;
 #ifdef __QUASI_PEAK__
-        case AV_QUASI:
-        { static float old_RSSI = -150.0;
+  case AV_QUASI:
+  { static float old_RSSI = MIN_RSSI_VALUE;
 
         if (setting.frequency_step == 0) {
             if (i == 0) old_RSSI = trace_data[sweep_points-1];
@@ -5699,6 +5686,11 @@ static volatile int dummy;
     redraw_request|=REDRAW_CAL_STATUS | REDRAW_FREQUENCY;
   }
   setting.actual_sweep_time_us = setting.measure_sweep_time_us;
+  // The zero-span x axis represents the sweep that just completed. Recompute
+  // its tuple every time; update_grid_if_changed() suppresses redraws while
+  // the exact grid geometry remains unchanged.
+  if (FREQ_IS_CW())
+    update_grid_if_changed();
   // Not possible reduce sweep time, it minimum!
   if (setting.sweep_time_us < setting.actual_sweep_time_us && setting.additional_step_delay_us == 0){
 // Warning!! not correct set sweep time here, you get error!!
@@ -5771,6 +5763,23 @@ static volatile int dummy;
       if (MODE_INPUT(setting.mode)) {               // Assign maxima found to tracking markers
         int i = 0;
         int m = 0;
+#ifdef TINYSA4
+        if (config._mode & _MODE_MARKER_ORDER) {    // The highest maxima, one per tracking marker, left to right
+          for (; m < MARKERS_MAX; m++)
+            if (markers[m].enabled && markers[m].mtype & M_TRACKING && markers[m].trace == t)
+              i++;
+          if (i > cur_max) i = cur_max;
+          while (--i > 0) {                         // Bubble sort these first maxima on frequency
+            for (m = 0; m < i; m++)
+              if (max_index[m] > max_index[m+1]) {
+                uint16_t s = max_index[m];
+                max_index[m] = max_index[m+1];
+                max_index[m+1] = s;
+              }
+          }
+          i = m = 0;
+        }
+#endif
         while (i < cur_max) {                                 // For all maxima found
           while (m < MARKERS_MAX) {
             if (markers[m].enabled && markers[m].mtype & M_TRACKING && markers[m].trace == t) {   // Available marker found
@@ -6473,6 +6482,7 @@ static const  char *const test_text [4] =
 static const  char *(test_fail_cause [TEST_COUNT]);
 static int test_status[TEST_COUNT];
 static int show_test_info = FALSE;
+static const char *test_hint;             // last line of the test list while waiting for a touch
 static volatile int test_wait = false;
 static float test_value;
 
@@ -6492,7 +6502,7 @@ void determine_direct_test_freq(void) {
   }
   int old_ultra = config.ultra;
   config.ultra = true;
-  float max_level = -150;
+  float max_level = MIN_RSSI_VALUE;
   set_refer_output(0);
   for (freq_t test_freq = test_start; test_freq < test_stop; test_freq += 30000000) {
     dirty = true;
@@ -6581,7 +6591,7 @@ void cell_draw_test_info(int x0, int y0)
       cell_printf(xpos, ypos, FONT_s"Self test status:");
     } else if (test_case[i].kind == TC_END) {
       if (test_wait)
-        cell_printf(xpos, ypos, FONT_s"Touch screen to continue");
+        cell_printf(xpos, ypos, FONT_s"%s", test_hint);
       continue;
     } else {
       cell_printf(xpos, ypos, FONT_s"Test %d: %s%s", i+1, test_fail_cause[i], test_text[test_status[i]] );
@@ -7150,6 +7160,7 @@ void selftest(int test)
       test_fail_cause[i] = "";
     }
     show_test_info = TRUE;
+    test_hint = "Touch screen to continue";
     test_step=0;
     test_step = setting.test_argument;
     if (test_step != 0) {
@@ -7167,9 +7178,7 @@ void selftest(int test)
       if (test_step == 2) {
         if (peakLevel < -60) {
           test_step = TEST_END;
-          ili9341_set_foreground(LCD_BRIGHT_COLOR_RED);
-          ili9341_drawstring_7x13("Signal level too low", 30, 140);
-          ili9341_drawstring_7x13("Did you connect high and low ports with cable?", 0, 210);
+          test_hint = "Cable connected? Touch screen to continue";   // drawn in the list, a direct draw was overwritten
           goto resume2;
         }
 
@@ -7948,6 +7957,14 @@ void calibrate_harmonic(void)
 }
 #endif
 
+// First of the three 20 pixel message lines at the end of the calibration, the last one
+// ("Touch screen to continue") must be on the 240 pixel screen of the tinySA
+#ifdef TINYSA4
+#define CAL_MSG_Y   200
+#else
+#define CAL_MSG_Y   180
+#endif
+
 void calibrate(void)
 {
   int local_test_status;
@@ -8200,14 +8217,14 @@ void calibrate(void)
 low_level:
 #endif
           ili9341_set_foreground(LCD_BRIGHT_COLOR_RED);
-          ili9341_drawstring_7x13("Signal level incorrect", 30, 200);
-          ili9341_drawstring_7x13("Check cable between connectors", 30, 220);
+          ili9341_drawstring_7x13("Signal level incorrect", 30, CAL_MSG_Y);
+          ili9341_drawstring_7x13("Check cable between connectors", 30, CAL_MSG_Y + 20);
           goto quit;
         }
         //    chThdSleepMilliseconds(1000);
         if (local_test_status != TS_PASS) {
           ili9341_set_foreground(LCD_BRIGHT_COLOR_RED);
-          ili9341_drawstring_7x13("Calibration failed", 30, 220);
+          ili9341_drawstring_7x13("Calibration failed", 30, CAL_MSG_Y + 20);
           goto quit;
         }
 #ifdef TINYSA4
@@ -8287,12 +8304,12 @@ low_level:
 #endif
   config_save();
   ili9341_set_foreground(LCD_BRIGHT_COLOR_GREEN);
-  ili9341_drawstring_7x13("Calibration complete", 40, 220);
+  ili9341_drawstring_7x13("Calibration complete", 40, CAL_MSG_Y + 20);
 quit:
 #ifdef TINYSA4
   config.ultra = old_ultra;
 #endif
-  ili9341_drawstring_7x13("Touch screen to continue", 40, 240);
+  ili9341_drawstring_7x13("Touch screen to continue", 40, CAL_MSG_Y + 40);
   wait_user();
   ili9341_clear_screen();
   set_sweep_points(old_sweep_points);

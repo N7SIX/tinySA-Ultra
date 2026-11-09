@@ -110,19 +110,24 @@ float2int(float v)
 }
 #endif
 
-void update_grid(void)
+static void calculate_grid(int16_t *offset, int16_t *width, freq_t *span)
 {
   freq_t gdigit = 1000000000;
   freq_t fstart = get_sweep_frequency(ST_START) + (setting.frequency_offset - FREQUENCY_SHIFT);
   freq_t fspan  = get_sweep_frequency(ST_SPAN);
   freq_t grid;
+  bool time_domain = fspan == 0;
 
-  if (fspan == 0) {
+  if (time_domain) {
     fspan = setting.actual_sweep_time_us; // Time in uS
     fstart = 0;
   }
+  if (fspan == 0)
+    fspan = 1;
   if (config.gridlines == 0) {
     grid = fspan/10;
+    if (grid == 0)
+      grid = 1;
   } else {
   if (config.gridlines < 3)
     config.gridlines = 6;
@@ -139,19 +144,52 @@ void update_grid(void)
     gdigit /= 10;
   }
   }
-  grid_span = grid;
-  if (grid > 1000) {
-    grid_offset = (WIDTH) * ((fstart % grid) / 100) / (fspan / 100);
-    grid_width = (WIDTH) * (grid / 100) / (fspan / 1000);
+  *span = grid;
+  if (time_domain) {
+    // The zero-span x axis is measured in microseconds. Keep the full ratio
+    // until the final division so 5-20 ms sweeps do not shift by whole pixels.
+    *offset = (int16_t)((uint64_t)WIDTH * (fstart % grid) / fspan);
+    *width = (int16_t)((uint64_t)WIDTH * 10U * grid / fspan);
+  } else if (grid > 1000) {
+    *offset = (WIDTH) * ((fstart % grid) / 100) / (fspan / 100);
+    *width = (WIDTH) * (grid / 100) / (fspan / 1000);
   } else {
-    grid_offset = (WIDTH) * ((fstart % grid)) / (fspan);
-    grid_width = (WIDTH) * (grid) / (fspan/10);
+    *offset = (WIDTH) * ((fstart % grid)) / (fspan);
+    *width = (WIDTH) * (grid) / (fspan/10);
   }
+  if (*width < 1)
+    *width = 1;
   if (config.gridlines == 0)
-    grid_offset = 0;
+    *offset = 0;
+}
+
+static void apply_grid(int16_t offset, int16_t width, freq_t span)
+{
+  grid_offset = offset;
+  grid_width = width;
+  grid_span = span;
 //  if (setting.waterfall)
   set_level_meter_or_waterfall();
   redraw_request |= REDRAW_FREQUENCY | REDRAW_AREA;
+}
+
+void update_grid(void)
+{
+  int16_t offset;
+  int16_t width;
+  freq_t span;
+  calculate_grid(&offset, &width, &span);
+  apply_grid(offset, width, span);
+}
+
+void update_grid_if_changed(void)
+{
+  int16_t offset;
+  int16_t width;
+  freq_t span;
+  calculate_grid(&offset, &width, &span);
+  if (offset != grid_offset || width != grid_width || span != grid_span)
+    apply_grid(offset, width, span);
 }
 
 #if 0
@@ -217,7 +255,16 @@ const int ham_band_max = 18;
 
 int ham_band(int x)      // Search which index in the frequency tabled matches with frequency  f using actual_rbw
 {
-  freq_t f = getFrequency(x)  + (setting.frequency_offset - FREQUENCY_SHIFT);
+  freq_t f = getFrequency(x);
+#ifdef __BANDS__
+  if ((config.hambands & 2) && !setting.multi_band)   // band table
+    for (int i = 0; i < BANDS_MAX; i++)
+      if (setting.bands[i].enabled && setting.bands[i].start <= f && f <= setting.bands[i].end)
+        return true;
+  if (!(config.hambands & 1))
+    return false;
+#endif
+  f += (setting.frequency_offset - FREQUENCY_SHIFT);
   int L = 0;
   int R =  ham_band_max - 1;
   while (L <= R) {
@@ -427,7 +474,7 @@ to_dBm(const float v)
     return   logf(v/(sqrtf(50.0)))*(20.0/logf(10.0)) + 30.0;
   case U_VPP:
 //  return log10f(v/(sqrtf(50.0)))* 20.0             + 30.0;
-    return   logf((v/2.828)/(sqrtf(50.0)))*(20.0/logf(10.0)) + 30.0;
+    return   logf(v/(2.828*sqrtf(50.0)))*(20.0/logf(10.0)) + 30.0;
   case U_WATT:
 //  return log10f(v*1000.0)* 10.0;
     return   logf(v*1000.0)*(10.0/logf(10.0));
@@ -508,11 +555,17 @@ trace_into_index_y_array(index_y_t *y, float *array, int points)
     if (mult) value = fast_expf(value*mult);
     value = ref - value * scale;
     int v = value;
-         if (v <   0) v = 0;
-    else if (v > max) v = max;
+         if (v <    0) v = 0;
+    else if (v >= max) v = max-1;
     y[i] = v;
   }
   return;
+}
+
+static index_y_t trace_into_index_y(float level) {
+  index_y_t tp;
+  trace_into_index_y_array(&tp, &level, 1);
+  return tp;
 }
 
 static inline void
@@ -588,43 +641,50 @@ markmap_upperarea(void)
 #endif
 }
 
-static uint16_t get_trigger_level(
 #ifdef __BANDS__
-    int x
-#else
-    void
-#endif
-    ){
-  index_y_t trigger;
-#ifdef TINYSA4
-  if (setting.trigger_trace != 255)
-    setting.trigger_level = measured[setting.trigger_trace][x];
-#endif
-#ifdef __BANDS__
-  else if (!setting.draw_line && setting.multi_band && !setting.multi_trace) {
-    int b = getBand(x);
-    setting.trigger_level = setting.bands[b].level;
-  }
-#endif
-  trace_into_index_y_array(&trigger, &setting.trigger_level, 1);
-  return trigger;
+// Triggers draw in multiband mode
+bool is_multiband_trigger(void) {
+  if (setting.multi_band && !setting.multi_trace
+        #ifdef __DRAW_LINE__
+          && !setting.draw_line
+        #endif
+     ) return true;
+  return false;
 }
 
-static inline void
-markmap_trigger_area(void){
-#ifdef __BANDS__
-  uint16_t tp = get_trigger_level(0);
-#else
-  uint16_t tp = get_trigger_level();
+// Mark band trigger area for redraw
+static void markmap_band_trigger(int band) {
+  band_t *b = &setting.bands[band];
+  if (!b->enabled) return;
+  int tp = trace_into_index_y(b->level);
+  int x1 = trace_index_x[b->start_index == 0 ? b->start_index : b->start_index - 1];
+  int x2 = trace_index_x[b->stop_index];
+  invalidate_rect(x1, tp, x2, tp);
+}
 #endif
+
+// Mark trigger area or line for redraw
+static void markmap_trigger(void) {
+  int tp = trace_into_index_y(setting.trigger_level);
   markmap[current_mappage][tp/CELLWIDTH] = (map_t)0xFFFFFFFF;
+}
+
+// Mark all trigger lines area for redraw
+static void markmap_trigger_area(void) {
+#ifdef __BANDS__
+  if (is_multiband_trigger()) {
+    for (int band = 0; band < BANDS_MAX; band++)
+      markmap_band_trigger(band);
+  } else
+#endif
+    markmap_trigger();
 }
 
 //
 // in most cases _compute_outcode clip calculation not give render line speedup
 //
 static inline void
-cell_drawline(int x0, int y0, int x1, int y1, int c)
+cell_drawline(int x0, int y0, int x1, int y1, pixel_t c)
 {
   if (x0 < 0 && x1 < 0) return;
   if (y0 < 0 && y1 < 0) return;
@@ -657,6 +717,24 @@ cell_drawline(int x0, int y0, int x1, int y1, int c)
     if (e2 > dx) { err-= dy; x0+=sx;}
     if (e2 < dy) { err-= dx; y0+=CELLWIDTH; if (y0>=CELLHEIGHT*CELLWIDTH) return;} // stop after cell bottom
   }
+}
+
+static void
+cell_draw_hline(int x0, int x1, int y, pixel_t c) {
+  if ((uint32_t)y >= CELLHEIGHT) return;
+//  if (x1 < x0) SWAP(x0, x1);
+  if (x0 <         0) x0 = 0;
+  if (x1 > CELLWIDTH) x1 = CELLWIDTH;
+  for (;x0 < x1; x0++) cell_buffer[y * CELLWIDTH + x0] = c;
+}
+
+static void
+cell_draw_vline(int y0, int y1, int x, pixel_t c) {
+  if ((uint32_t)x >= CELLWIDTH) return;
+//  if (y1 < y0) SWAP(y0, y1);
+  if (y0 <          0) y0 = 0;
+  if (y1 > CELLHEIGHT) y1 = CELLHEIGHT;
+  for (;y0 < y1; y0++) cell_buffer[y0 * CELLWIDTH + x] = c;
 }
 
 // Give a little speedup then draw rectangular plot (50 systick on all calls, all render req 700 systick)
@@ -1159,50 +1237,56 @@ draw_cell(int m, int n)
 #ifdef __CHANNEL_POWER__
   if (setting.measurement == M_CP||setting.measurement == M_SNR) {
     c = GET_PALTETTE_COLOR(LCD_TRIGGER_COLOR);
-    for (x = 0; x < w; x++)
-      if (x+x0 == WIDTH/3 || x+x0 == 2*WIDTH/3 ) {
-        for (y = 0; y < h; y++) cell_buffer[y * CELLWIDTH + x] = c;
-    }
-  }
-#endif
-#ifdef __BANDS__
-  if (setting.multi_band && !setting.multi_trace) {
-    c = GET_PALTETTE_COLOR(LCD_TRIGGER_COLOR);
-    for (x = 0; x < w; x++) {
-      int idx1 = ((x+x0) * sweep_points) / WIDTH;
-      int idx2 = ((x+x0+1) * sweep_points) / WIDTH;
-      if (getBand(idx1) != getBand(idx2) && idx2 < WIDTH-2) {
-        for (y = 0; y < h; y++) cell_buffer[y * CELLWIDTH + x] = c;
-      }
-    }
+    cell_draw_vline(0, h, 1*WIDTH/3 - x0, c);
+    cell_draw_vline(0, h, 2*WIDTH/3 - x0, c);
   }
 #endif
 //  PULSE;
 #endif
-// Draw trigger line
-  if ((setting.trigger != T_AUTO
+
+#ifdef __BANDS__
+  // Band table highlights (ham_band): name at the bottom left of each band
+  if ((config.hambands & 2) && !setting.multi_band && y0 + h >= HEIGHT - 12) {
+    ili9341_set_foreground(LCD_FG_COLOR);
+    for (int band = 0; band < BANDS_MAX; band++) {
+      band_t *b = &setting.bands[band];
+      if (!b->enabled || b->start > getFrequency(sweep_points - 1) || b->end < getFrequency(0)) continue;
+      i = 0;
+      while (getFrequency(i) < b->start) i++;
+      cell_printf(trace_index_x[i] + 2 - x0, HEIGHT - 12 - y0, "%s", b->name);
+    }
+  }
+#endif
+
+  // Draw trigger and band splitter lines
+  bool draw_trigger = (setting.trigger != T_AUTO
 #ifdef __TRIGGER_TRACE__
        && setting.trigger_trace == 255
 #endif
-      )
+      );
+  c = GET_PALTETTE_COLOR(LCD_TRIGGER_COLOR);
+#ifdef __BANDS__
+  if (setting.multi_band && !setting.multi_trace) {
+    for (int band = 0; band < BANDS_MAX; band++) {
+      band_t *b = &setting.bands[band];
+      if (!b->enabled) continue;
+      // Get start and stop band display position
+      int x1 = trace_index_x[b->start_index == 0 ? 0 : b->start_index - 1] - x0;
+      int x2 = trace_index_x[b->stop_index ] - x0;
+      cell_draw_vline(0, h, x2, c); // Draw vertical band splitter
+      if (draw_trigger)             // Draw trigger line
+        cell_draw_hline(x1, x2, trace_into_index_y(b->level) - y0, c);
+    }
+    draw_trigger = false; // triggers draw in multi-band mode
+  }
+#endif
+  // Draw line or single trigger line
+  if (draw_trigger
 #ifdef __DRAW_LINE__
       || setting.draw_line
 #endif
-      ) {
-    c = GET_PALTETTE_COLOR(LCD_TRIGGER_COLOR);
-#ifndef __BANDS__
-    int tp = get_trigger_level() - y0;
-    if (tp>=0 && tp < h)
-#endif
-      for (x = 0; x < w; x++) {
-#ifdef __BANDS__
-        int tp = get_trigger_level(x + x0 - CELLOFFSETX) - y0;
-        if (tp>=0 && tp < h)
-#endif
-          if ((uint32_t)(x + x0 - CELLOFFSETX) <= WIDTH + CELLOFFSETX)
-            cell_buffer[tp * CELLWIDTH + x] = c;
-      }
-  }
+     ) cell_draw_hline(0, w, trace_into_index_y(setting.trigger_level) - y0, c);
+
 #if 1
   // Only right cells
   if (m >= (GRID_X_TEXT)/CELLWIDTH)
@@ -1378,6 +1462,57 @@ draw_all(bool flush)
   redraw_request = 0;
 }
 
+//
+// Call this function then need fast draw trigger line
+// Used in ui.c for leveler move trigger (not added yet), drag trigger and etc.
+void redraw_trigger(int band) {
+  (void)band;
+#ifdef __BANDS__
+  if (is_multiband_trigger())
+    markmap_band_trigger(band);
+  else
+#endif
+    markmap_trigger();
+  draw_all_cells(TRUE);
+  redraw_request|= REDRAW_CAL_STATUS | REDRAW_AREA;  // Force redraw cal after
+}
+
+// Convert y display position to value in dBm
+float pos_to_trigger_value(int y) {
+  if (y <           0) y = 0;
+  if (y > area_height) y = area_height;
+  return to_dBm(get_trace_refpos() - get_trace_scale() * (float)(y * NGRIDY) / area_height);
+}
+
+// Search nearest trigger line on screen
+int search_nearest_trigger(int x, int y) {
+  if ((setting.trigger == T_AUTO       // Not in auto mode
+      #ifdef __TRIGGER_TRACE__
+       || setting.trigger_trace != 255 // Not in Trigger trace mode
+      #endif
+      )
+      #ifdef __DRAW_LINE__
+       && !setting.draw_line           // Allow in draw line mode
+      #endif
+  ) return -1;
+#ifdef __BANDS__
+  if (is_multiband_trigger()) {
+    for (int band = 0; band < BANDS_MAX; band++) {
+      band_t *b = &setting.bands[band];
+      if (!b->enabled) continue;
+      int x1 = trace_index_x[b->start_index];
+      int x2 = trace_index_x[b->stop_index ];
+      if (x < x1 || x > x2) continue;
+      int tl = trace_into_index_y(b->level) + DRAG_TRIGGER_DISTANCE - y;
+      if ((uint32_t)tl < 2 * DRAG_TRIGGER_DISTANCE) return band;
+    }
+    return -1;
+  }
+#endif
+  int tl = trace_into_index_y(setting.trigger_level) + DRAG_TRIGGER_DISTANCE - y;
+  if ((uint32_t)tl < 2 * DRAG_TRIGGER_DISTANCE) return 0;
+  return -1;
+}
 
 //
 // Call this function then need fast draw marker and marker info
@@ -2019,7 +2154,7 @@ static const uint8_t sd_icon [] = {
   _BMP16(0b0111111111111000)   //
   };
   if (SD_Inserted() && SDIS_IS_ENABLED) {
-    ili9341_set_foreground(LCD_BRIGHT_COLOR_GREEN);
+    ili9341_set_foreground(sd_repeat ? LCD_BRIGHT_COLOR_RED : LCD_BRIGHT_COLOR_GREEN);
     ili9341_blitBitmap(4, SD_CARD_START, 16, 16, sd_icon);
 //  ili9341_drawstring("-SD-", x, SD_CARD_START);
   }
@@ -2167,7 +2302,12 @@ static void update_waterfall(void){
 //  START_PROFILE;
 #ifdef TINYSA4
 #define WATERFALL_MULTI (SPI_BUFFER_SIZE / WIDTH)
+#ifdef __REFRESH_RLE__
+  remote_hold = (auto_capture == 2);     // refresh rle: scroll as without remote, then push one "scrl"
+  if (!auto_capture || remote_hold) {
+#else
   if (!auto_capture) {
+#endif
     for (i = CHART_BOTTOM-WATERFALL_MULTI; i>=graph_bottom; i-=WATERFALL_MULTI) {		// Scroll down WATERFALL_MULTI lines at once
       ili9341_read_memory(OFFSETX, i, w_width, WATERFALL_MULTI, spi_buffer);
       ili9341_bulk(OFFSETX, i+1, w_width, WATERFALL_MULTI);
@@ -2179,6 +2319,14 @@ static void update_waterfall(void){
     ili9341_read_memory(OFFSETX, i, w_width, 1, spi_buffer);
     ili9341_bulk(OFFSETX, i+1, w_width, 1);
   }
+#ifdef __REFRESH_RLE__
+  if (remote_hold) {                     // rows graph_bottom .. CHART_BOTTOM-1 moved down by dy
+    remote_region_t rd = {"scrl\r\n", OFFSETX, graph_bottom, w_width, CHART_BOTTOM - graph_bottom};
+    int16_t dy = 1;
+    remote_hold = false;
+    send_region(&rd, (uint8_t *)&dy, sizeof(dy));
+  }
+#endif
   index_y_t *index = NULL;
   for (int t=0;t<TRACES_MAX;t++) {                      // Find trace with active measurement
     if (IS_TRACE_ENABLE(t) && setting.average[t] == AV_OFF) {

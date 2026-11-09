@@ -112,6 +112,7 @@
 #define __USE_USB_MSC__           // USB DISK mode: SD card as USB mass storage next to the USB serial port
 #define __SD_FIRMWARE_UPDATE__    // Install a firmware .bin from the SD card (fw_update.c)
 #define __CAPTURE_RLE8__          // capture with an argument sends the screen RLE8 compressed (NanoVNA-D format)
+#define __REFRESH_RLE__           // refresh rle: remote desktop pushes RLE8 compressed, the waterfall as a scroll
 #define __LCD_BRIGHTNESS__        // LCD or hardware allow change brightness, add menu item for this
 #define __HARMONIC__
 #define __NOISE_FIGURE__
@@ -292,13 +293,17 @@ void my_veryfast_delay(int t);
 float my_atof(const char *p);
 freq_t my_atoui(const char *p);
 int shell_printf(const char *fmt, ...);
+void shell_run_pending(bool ui_wait);   // run a console command in the sweep thread
 int usage_printf(const char *fmt, ...);
 void clear_backup(void);
 const char *get_hw_version_text(void);
 
 #ifdef __REMOTE_DESKTOP__
 extern uint8_t remote_mouse_down;
-extern uint8_t auto_capture;
+extern uint8_t auto_capture;        // 0 = refresh off, 1 = refresh on, 2 = refresh rle
+#ifdef __REFRESH_RLE__
+extern uint8_t remote_hold;         // drop pushes, e.g. while the waterfall scrolls (pushed as one "scrl")
+#endif
 typedef struct {
   char new_str[6];
   int16_t x;
@@ -376,7 +381,6 @@ enum {
 //#define SWEEP_FACTORY    0x20
 #endif
 #define SWEEP_CALIBRATE_HARMONIC 0x40
-#define SWEEP_UI_MODE   0x80
 
 extern uint8_t sweep_mode;
 extern uint8_t completed;
@@ -637,6 +641,8 @@ extern uint16_t graph_bottom;
 
 // Marker start drag distance (can be bigger for various display resolution)
 #define MARKER_PICKUP_DISTANCE 20
+// Trigger line start drag distance (can be bigger for various display resolution)
+#define DRAG_TRIGGER_DISTANCE  10
 
 // Smith/polar chart
 //#define P_CENTER_X (CELLOFFSETX + WIDTH/2)
@@ -812,6 +818,8 @@ float marker_to_value(const int i);
 // auto name
 #define _MODE_AUTO_FILENAME    0x10
 #define _MODE_MHZ_CSV          0x20
+// tracking markers left to right
+#define _MODE_MARKER_ORDER     0x40
 
 #ifdef __USE_SD_CARD__
 // SD Icon Save (SDIS) configuration
@@ -823,6 +831,7 @@ float marker_to_value(const int i);
 #define SDIS_VALID_MASK (1 << 7)
 #define SDIS_DEFAULT (SDIS_CAPTURE | SDIS_VALID_MASK)
 #define SDIS_IS_ENABLED ((config.sd_icon_save & ~SDIS_VALID_MASK) != 0)
+extern bool sd_repeat;
 #endif // __USE_SD_CARD__
 
 #pragma pack(push, 4)
@@ -996,12 +1005,14 @@ extern int8_t marker_tracking;
 
 void plot_init(void);
 void update_grid(void);
+void update_grid_if_changed(void);
 void request_to_redraw_grid(void);
 void redraw_frame(void);
 //void redraw_all(void);
 void request_to_draw_cells_behind_menu(void);
 void request_to_draw_cells_behind_numeric_input(void);
 void redraw_marker(int marker);
+void redraw_trigger(int band);
 void markmap_all_markers(void);
 void plot_into_index(measurement_t measured);
 void draw_frequencies(void);
@@ -1013,6 +1024,10 @@ void draw_cal_status(void);
 
 int distance_to_index(int8_t t, uint16_t idx, int16_t x, int16_t y);
 int search_nearest_index(int x, int y, int t);
+int search_nearest_trigger(int x, int y);
+
+float pos_to_trigger_value(int y);
+bool is_multiband_trigger(void);
 
 int marker_search_max(int m);
 int marker_search_left_max(int m);
@@ -1610,6 +1625,7 @@ extern const char * const averageText[];
 extern uint8_t menu_current_level;
 void menu_invoke(int item);
 extern char    kp_buf[];
+void ui_set_keypad_text(const char *text);
 void set_numeric_value(void);
 
 void ui_mode_normal(void);
@@ -1644,7 +1660,7 @@ extern volatile uint8_t abort_enabled;
 
 // lever_mode
 enum lever_mode {
-  LM_MARKER, LM_SEARCH, LM_CENTER, LM_SPAN, LM_EDELAY
+  LM_MARKER, LM_SEARCH, LM_CENTER, LM_SPAN, LM_TRIGGER
 };
 
 // marker smith value format
@@ -1761,8 +1777,8 @@ void rtc_set_time(uint32_t dr, uint32_t tr);
 #include "../FatFs/diskio.h"
 extern uint16_t sd_card_inserted_at_boot;
 bool SD_Inserted(void);
-bool SD_BlockAddressing(void);     // initialized card uses block (sector) addresses (SDHC/SDXC)
 void SD_PowerOff(void);
+bool SD_BlockAddressing(void);     // initialized card uses block (sector) addresses (SDHC/SDXC)
 // Buffers for SD card use spi_buffer
 #if SPI_BUFFER_SIZE < 2048
 #error "SPI_BUFFER_SIZE for SD card support need size >= 2048"
@@ -1800,6 +1816,9 @@ void clock_at_48MHz(void);
 #endif
 #if defined(__SD_FIRMWARE_UPDATE__) && (!defined(TINYSA4) || !defined(__USE_USB_MSC__) || !defined(__SD_FILE_BROWSER__))
 #error "__SD_FIRMWARE_UPDATE__ needs TINYSA4, __USE_USB_MSC__ and __SD_FILE_BROWSER__"
+#endif
+#if defined(__REFRESH_RLE__) && (!defined(__REMOTE_DESKTOP__) || !defined(__CAPTURE_RLE8__))
+#error "__REFRESH_RLE__ needs __REMOTE_DESKTOP__ and __CAPTURE_RLE8__"
 #endif
 #ifdef __SD_FIRMWARE_UPDATE__
 #include "fw_update.h"
@@ -1879,7 +1898,7 @@ int plot_printf(char *str, int, const char *fmt, ...);
 #define define_to_STR(x)  STR1(x)
 
 // sa_core.c
-
+#define MIN_RSSI_VALUE  ( -160 )
 typedef uint8_t  deviceRSSI_t;
 typedef int16_t  pureRSSI_t;
 extern int current_index;
@@ -1893,7 +1912,6 @@ extern int current_index;
 extern uint16_t actual_rbw_x10;
 
 void toggle_tracking(void);
-void toggle_hambands(void);
 void reset_calibration(void);
 void set_reflevel(float);
 void set_external_gain(float);
